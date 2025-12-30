@@ -1,2 +1,2 @@
-# Xu-Lab-UUV-MCUA
-Firmware for MCU A in charge of navigation and control.
+# Xu-Lab-UUV-Software
+Software for Xu Lab UUV Project.
