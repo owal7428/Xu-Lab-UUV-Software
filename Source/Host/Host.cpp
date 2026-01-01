@@ -85,7 +85,36 @@ int main(int argc, char* argv[])
                     break;
 
                 case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-                    printf("Gamepad axis %d value %d\n", Event.gaxis.axis, Event.gaxis.value);
+                    switch(Event.gaxis.axis)
+                    {
+                        case SDL_GAMEPAD_AXIS_LEFTX:
+                            printf("Gamepad left stick horizontal: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            break;
+                        
+                        case SDL_GAMEPAD_AXIS_LEFTY:
+                            printf("Gamepad left stick vertical: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            break;
+                        
+                        case SDL_GAMEPAD_AXIS_RIGHTX:
+                            printf("Gamepad right stick horizontal: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            break;
+                        
+                        case SDL_GAMEPAD_AXIS_RIGHTY:
+                            printf("Gamepad right stick vertical: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            break;
+                        
+                        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
+                            printf("Gamepad left trigger: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            break;
+                        
+                        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
+                            printf("Gamepad right trigger: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            break;
+                        
+                        default:
+                            printf("Gamepad axis %d: %f\n", Event.gaxis.axis, static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            break;
+                    }
                     break;
 
                 default:
