@@ -1,9 +1,23 @@
 #include "Shader.hpp"
 
 #include <cstdio>
+#include <string>
+#include <fstream>
+#include <sstream>
 
-Shader::Shader(const char *VShaderString, const char *FShaderString)
+Shader::Shader(const char* ShaderString)
 {
+    // Get shader code from file
+
+    std::string VShaderFile(ShaderString);
+    VShaderFile += ".vert";
+
+    std::string FShaderFile(ShaderString);
+    FShaderFile += ".frag";
+
+    const char* VShaderString = this->ReadFile(VShaderFile.c_str());
+    const char* FShaderString = this->ReadFile(FShaderFile.c_str());
+
     // Compile vertex and fragment shaders
     
     this->VertexShader = this->Compile(GL_VERTEX_SHADER, VShaderString);
@@ -17,7 +31,27 @@ Shader::Shader(const char *VShaderString, const char *FShaderString)
     glLinkProgram(this->Program);
 }
 
-GLuint Shader::Compile(GLenum ShaderType, const char *ShaderSource)
+const char *Shader::ReadFile(const char* FilePath)
+{
+    std::ifstream FileStream(FilePath);
+
+    if (!FileStream)
+        fprintf(stderr, "Could not find file: %s\n", FilePath);
+
+    std::string StringLine;
+    std::stringstream StringStream;
+
+    while (std::getline(FileStream, StringLine))
+    {
+        StringStream << StringLine << '\n';
+    }
+
+    FileStream.close();
+
+    return StringStream.str().c_str();
+}
+
+GLuint Shader::Compile(GLenum ShaderType, const char* ShaderSource)
 {
     // Compile shader from source string
 

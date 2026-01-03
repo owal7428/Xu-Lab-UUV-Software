@@ -12,13 +12,15 @@ private:
 
     GLuint Compile(GLenum ShaderType, const char* ShaderSource);
 
+    const char* ReadFile(const char* FilePath);
+
 public:
     /**
 	 * @brief Constructs and compiles the shader.
 	 * @param VShaderString String containing vertex shader code.
      * @param FShaderString String containing fragment shader code.
 	 */
-    Shader(const char* VShaderString, const char* FShaderString);
+    Shader(const char* ShaderName);
     
     /**
      * @brief Activates the shader.

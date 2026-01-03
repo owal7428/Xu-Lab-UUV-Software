@@ -5,40 +5,6 @@
 #include "Shader.hpp"
 #include "VideoReceiver.hpp"
 
-static const char* VERT_SRC = R"(
-#version 330 core
-layout (location = 0) in vec2 pos;
-layout (location = 1) in vec2 tex;
-out vec2 TexCoord;
-void main() {
-    gl_Position = vec4(pos, 0.0, 1.0);
-    TexCoord = tex;
-}
-)";
-
-static const char* FRAG_SRC = R"(
-#version 330 core
-in vec2 TexCoord;
-out vec4 FragColor;
-
-uniform sampler2D texY;
-uniform sampler2D texU;
-uniform sampler2D texV;
-
-void main() {
-    float y = texture(texY, TexCoord).r;
-    float u = texture(texU, TexCoord).r - 0.5;
-    float v = texture(texV, TexCoord).r - 0.5;
-
-    FragColor = vec4(
-        y + 1.402 * v,
-        y - 0.344136 * u - 0.714136 * v,
-        y + 1.772 * u,
-        1.0
-    );
-}
-)";
-
 void Cleanup(SDL_Window* Window)
 {
     SDL_DestroyWindow(Window);
@@ -82,7 +48,8 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    Shader YUVToRGBShader = Shader(VERT_SRC, FRAG_SRC);
+    // Assuming executable is running from build directory
+    Shader YUVToRGBShader = Shader("../Shaders/YUVToRGB");
     YUVToRGBShader.Bind();
 
     // Fullscreen quad (flipped vertically)
