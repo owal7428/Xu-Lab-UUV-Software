@@ -4,7 +4,7 @@ project(XuLabHost)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SOURCES Host.cpp Shader.cpp VideoReceiver.cpp ThirdParty/gl.c)
+set(SOURCES Host.cpp VideoReceiver.cpp Renderer.cpp Shader.cpp ThirdParty/gl.c)
 
 add_executable(Host ${SOURCES})
 

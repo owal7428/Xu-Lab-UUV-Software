@@ -1,8 +1,10 @@
 #include <cstdio>
+
+#include <glad/gl.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
-#include "Shader.hpp"
+#include "Renderer.hpp"
 #include "VideoReceiver.hpp"
 
 void Cleanup(SDL_Window* Window)
@@ -23,12 +25,15 @@ int main(int argc, char* argv[])
     int Width = Receiver.GetVideoWidth();
     int Height = Receiver.GetVideoHeight();
 
-    // Init SDL
+    // Initialize SDL
+
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
      {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "SDL3 Failed to Initialize.", nullptr);
         return -1;
     }
+
+    // Setup SDL window
     
     SDL_Window* Window = SDL_CreateWindow("Host - Video Playback", Width, Height, SDL_WINDOW_OPENGL);
 
@@ -39,6 +44,8 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    // Setup GL context with GLAD
+
     SDL_GLContext GLContext = SDL_GL_CreateContext(Window);
 
     if (gladLoadGL((GLADloadfunc) SDL_GL_GetProcAddress) == 0) 
@@ -48,56 +55,7 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    // Assuming executable is running from build directory
-    Shader YUVToRGBShader = Shader("../Shaders/YUVToRGB");
-    YUVToRGBShader.Bind();
-
-    // Fullscreen quad (flipped vertically)
-    float verts[] = {
-        -1, -1,  0, 1,
-         1, -1,  1, 1,
-         1,  1,  1, 0,
-        -1,  1,  0, 0
-    };
-    unsigned idx[] = {0,1,2, 2,3,0};
-
-    GLuint VAO, VBO, EBO;
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
-    glGenBuffers(1, &EBO);
-
-    glBindVertexArray(VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    // YUV textures
-    GLuint texY, texU, texV;
-    glGenTextures(1, &texY);
-    glGenTextures(1, &texU);
-    glGenTextures(1, &texV);
-
-    auto init_tex = [](GLuint t, int w, int h) 
-    {
-        glBindTexture(GL_TEXTURE_2D, t);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, w, h, 0,GL_RED, GL_UNSIGNED_BYTE, nullptr);
-    };
-
-    init_tex(texY, Width, Height);
-    init_tex(texU, Width/2, Height/2);
-    init_tex(texV, Width/2, Height/2);
-
-    glUniform1i(glGetUniformLocation(YUVToRGBShader.GetProgram(),"texY"), 0);
-    glUniform1i(glGetUniformLocation(YUVToRGBShader.GetProgram(),"texU"), 1);
-    glUniform1i(glGetUniformLocation(YUVToRGBShader.GetProgram(),"texV"), 2);
+    Renderer FrameRenderer = Renderer(Width, Height, &Receiver, "../Shaders/YUVToRGB");
 
     printf("Press keys or controller buttons. ESC or window close to quit.\n\n");
 
@@ -196,46 +154,7 @@ int main(int argc, char* argv[])
         }
 
         // Render video
-
-        // Read frame off the network if one exists
-        if (Receiver.ReadPacket() < 0) continue;
-
-        if (!Receiver.IsPacketVideo())
-        {
-            Receiver.ClearPacket();
-            continue;
-        }
-
-        Receiver.EnqueueDecode();
-
-        while (Receiver.GetFrameFromDecoder() == 0) 
-        {
-            VideoFrameData Data = Receiver.GetVideoFrameData();
-
-            // Ensure 1-byte alignment
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, Data.YLinesize);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, texY);
-            glTexSubImage2D(GL_TEXTURE_2D,0,0,0, Data.FrameWidth, Data.FrameHeight, GL_RED, GL_UNSIGNED_BYTE, Data.YData);
-
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, Data.ULinesize);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D, texU);
-            glTexSubImage2D(GL_TEXTURE_2D,0,0,0, Data.FrameWidth / 2, Data.FrameHeight / 2, GL_RED, GL_UNSIGNED_BYTE, Data.UData);
-
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, Data.VLinesize);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, texV);
-            glTexSubImage2D(GL_TEXTURE_2D,0,0,0, Data.FrameWidth / 2, Data.FrameHeight / 2, GL_RED, GL_UNSIGNED_BYTE, Data.VData);
-
-            glClear(GL_COLOR_BUFFER_BIT);
-            glBindVertexArray(VAO);
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-            SDL_GL_SwapWindow(Window);
-            SDL_Delay(16);
-        }
+        FrameRenderer.Render(Window);
     }
 
     Cleanup(Window);
