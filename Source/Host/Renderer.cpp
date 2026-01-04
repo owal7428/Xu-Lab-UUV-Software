@@ -60,6 +60,11 @@ Renderer::Renderer(int Width, int Height, VideoReceiver* ReceiverPtr, const char
     InitTexture(this->TextureV, Width/2, Height/2);
 }
 
+void Renderer::UpdateViewport(int Width, int Height)
+{
+    glViewport(0, 0, Width, Height);
+}
+
 int Renderer::Render(SDL_Window* Window)
 {
     // Read frame off the network if one exists

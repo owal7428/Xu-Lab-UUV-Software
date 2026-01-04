@@ -29,6 +29,8 @@ private:
 public:
     Renderer(int Width, int Height, VideoReceiver* ReceiverPtr, const char* ShaderName);
 
+    void UpdateViewport(int Width, int Height);
+
     int Render(SDL_Window* Window);
 };
 

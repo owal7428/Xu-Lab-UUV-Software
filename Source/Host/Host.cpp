@@ -49,6 +49,8 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    SDL_SetWindowResizable(Window, true);
+
     // Setup GL context with GLAD
 
     SDL_GLContext GLContext = SDL_GL_CreateContext(Window);
@@ -80,6 +82,12 @@ int main(int argc, char* argv[])
             {
                 case SDL_EVENT_QUIT:
                     IsRunning = false;
+                    break;
+                
+                case SDL_EVENT_WINDOW_RESIZED:
+                    Width = Event.window.data1;
+                    Height = Event.window.data2;
+                    FrameRenderer.UpdateViewport(Width, Height);
                     break;
 
                 case SDL_EVENT_KEY_DOWN:
