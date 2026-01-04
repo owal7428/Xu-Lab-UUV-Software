@@ -33,6 +33,11 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    // Set OpenGL to version 3.3
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+
     // Setup SDL window
     
     SDL_Window* Window = SDL_CreateWindow("Host - Video Playback", Width, Height, SDL_WINDOW_OPENGL);

@@ -1,6 +1,7 @@
 #ifndef HOST_SHADER_HPP_
 #define HOST_SHADER_HPP_
 
+#include <string>
 #include <glad/gl.h>
 
 class Shader
@@ -12,7 +13,7 @@ private:
 
     GLuint Compile(GLenum ShaderType, const char* ShaderSource);
 
-    const char* ReadFile(const char* FilePath);
+    std::string ReadFile(const char* FilePath);
 
 public:
     /**
