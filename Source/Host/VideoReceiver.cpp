@@ -2,6 +2,22 @@
 
 #include <cstdio>
 
+VideoReceiver::VideoReceiver(const char *Url, FrameBuffer *BufferPtr)
+{
+    this->FormatContext = nullptr;
+    this->CodecContext = nullptr;
+    this->VideoStream = nullptr;
+    this->VideoStreamIndex = 0;
+    
+    this->Buffer = BufferPtr;
+
+    this->Packet = av_packet_alloc();
+    this->Frame = av_frame_alloc();
+
+    // Init FFMpeg stuff, ignore errors for now
+    this->Init(Url);
+}
+
 int VideoReceiver::Init(const char *Url)
 {
     avformat_network_init();
@@ -52,9 +68,6 @@ int VideoReceiver::Init(const char *Url)
     avcodec_parameters_to_context(this->CodecContext, this->VideoStream->codecpar);
     avcodec_open2(this->CodecContext, Codec, nullptr);
 
-    this->Packet = av_packet_alloc();
-    this->Frame = av_frame_alloc();
-
     return 0;
 }
 
@@ -74,54 +87,66 @@ int VideoReceiver::GetVideoHeight()
         return 0;
 }
 
-int VideoReceiver::ReadPacket()
+void VideoReceiver::StartReceiveLoop()
 {
-    return av_read_frame(this->FormatContext, this->Packet);
+    this->FormatContext->interrupt_callback.opaque = this;
+
+    // Set callback in case of stall to exit thread
+    this->FormatContext->interrupt_callback.callback = [](void* opaque) -> int
+    {
+        auto* Self = static_cast<VideoReceiver*>(opaque);
+        return !(Self->bNetLoop); // Exit (return 1) if loop should end
+    };
+    
+    this->bNetLoop = true;
+
+    // Start thread
+    this->NetThread = std::thread([this] { this->DecodeLoop(); });
 }
 
-void VideoReceiver::ClearPacket()
+void VideoReceiver::DecodeLoop()
 {
-    av_packet_unref(this->Packet);
-}
+    while(this->bNetLoop)
+    {
+        // Get packet from the network
+        if (av_read_frame(this->FormatContext, this->Packet) < 0)
+            continue;
+        
+        // Check packet contains video info
+        if (this->Packet->stream_index != this->VideoStreamIndex)
+        {
+            av_packet_unref(this->Packet);
+            continue;
+        }
 
-bool VideoReceiver::IsPacketVideo()
-{
-    if (this->Packet != nullptr)
-        return this->Packet->stream_index == this->VideoStreamIndex;
-    else
-        return false;
-}
+        // Enqueue packet for decoding
+        if (avcodec_send_packet(this->CodecContext, this->Packet) != 0)
+        {
+            av_packet_unref(this->Packet);
+            continue;
+        }
+        
+        // Packet data is no longer needed and can be reset for next receive
+        av_packet_unref(this->Packet);
 
-void VideoReceiver::EnqueueDecode()
-{
-    avcodec_send_packet(this->CodecContext, this->Packet);
-}
-
-int VideoReceiver::GetFrameFromDecoder()
-{
-    return avcodec_receive_frame(this->CodecContext, this->Frame);
-}
-
-VideoFrameData VideoReceiver::GetVideoFrameData()
-{
-    VideoFrameData Data {};
-
-    Data.FrameWidth = this->Frame->width;
-    Data.FrameHeight = this->Frame->height;
-    Data.YData = this->Frame->data[0];
-    Data.YLinesize = this->Frame->linesize[0];
-    Data.UData = this->Frame->data[1];
-    Data.ULinesize = this->Frame->linesize[1];
-    Data.VData = this->Frame->data[2];
-    Data.VLinesize = this->Frame->linesize[2];
-
-    return Data;
+        while (avcodec_receive_frame(this->CodecContext, this->Frame) == 0)
+        {
+            Buffer->Push(this->Frame);
+            av_frame_unref(this->Frame);
+        }
+    }
 }
 
 VideoReceiver::~VideoReceiver()
 {
-    av_frame_free(&this->Frame);
+    this->bNetLoop = false;
+
+    // Wait for network thread to finish
+    if (this->NetThread.joinable())
+        this->NetThread.join();
+
     av_packet_free(&this->Packet);
-    avcodec_free_context(&CodecContext);
-    avformat_close_input(&FormatContext);
+    av_frame_free(&this->Frame);
+    avcodec_free_context(&this->CodecContext);
+    avformat_close_input(&this->FormatContext);
 }

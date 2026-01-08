@@ -1,8 +1,10 @@
 #include "Renderer.hpp"
 
-Renderer::Renderer(int Width, int Height, VideoReceiver* ReceiverPtr, const char* ShaderName)
+Renderer::Renderer(int Width, int Height, FrameBuffer *BufferPtr, const char *ShaderName)
 {
-    this->Receiver = ReceiverPtr;
+    this->Buffer = BufferPtr;
+
+    this->Frame = av_frame_alloc();
 
     this->ShaderProgram = std::make_unique<Shader>(ShaderName);
     this->ShaderProgram->Bind();
@@ -52,12 +54,14 @@ Renderer::Renderer(int Width, int Height, VideoReceiver* ReceiverPtr, const char
         glBindTexture(GL_TEXTURE_2D, Texture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, Width, Height, 0,GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, Width, Height, 0,GL_RED, GL_UNSIGNED_BYTE, nullptr);
     };
 
     InitTexture(this->TextureY, Width, Height);
     InitTexture(this->TextureU, Width/2, Height/2);
     InitTexture(this->TextureV, Width/2, Height/2);
+
+    this->bIsBuffering = true;
 }
 
 void Renderer::UpdateViewport(int Width, int Height)
@@ -65,48 +69,89 @@ void Renderer::UpdateViewport(int Width, int Height)
     glViewport(0, 0, Width, Height);
 }
 
-int Renderer::Render(SDL_Window* Window)
+int Renderer::Render()
 {
-    // Read frame off the network if one exists
-    if (Receiver->ReadPacket() < 0) 
-        return 1;
+    // NOTE: Render assumes all video frames are in YUV420P pixel format
 
-    if (!Receiver->IsPacketVideo())
+    int BufferingStatus = this->CheckBufferingStatus();
+
+    if (BufferingStatus < 0)
     {
-        Receiver->ClearPacket();
-        return 2;
+        this->Draw();
+        return BufferingStatus;
     }
 
-    Receiver->EnqueueDecode();
+    if (this->Buffer->PopFrame(this->Frame) == 0)
+        UpdateFullscreenQuadTexture();
+    
+    this->Draw();
 
-    while (Receiver->GetFrameFromDecoder() == 0) 
+    av_frame_unref(this->Frame);
+    
+    return 0;
+}
+
+int Renderer::CheckBufferingStatus()
+{
+    size_t BufferOccupancy = this->Buffer->GetOccupancy();
+
+    if (this->bIsBuffering)
     {
-        VideoFrameData Data = Receiver->GetVideoFrameData();
+        // Check if we're done buffering
+        if (BufferOccupancy < 14)
+            return -1;
 
-        // Ensure 1-byte alignment
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        this->bIsBuffering = false;
+    }
 
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, Data.YLinesize);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, this->TextureY);
-        glTexSubImage2D(GL_TEXTURE_2D,0,0,0, Data.FrameWidth, Data.FrameHeight, GL_RED, GL_UNSIGNED_BYTE, Data.YData);
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, Data.ULinesize);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, this->TextureU);
-        glTexSubImage2D(GL_TEXTURE_2D,0,0,0, Data.FrameWidth / 2, Data.FrameHeight / 2, GL_RED, GL_UNSIGNED_BYTE, Data.UData);
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, Data.VLinesize);
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, this->TextureV);
-        glTexSubImage2D(GL_TEXTURE_2D,0,0,0, Data.FrameWidth / 2, Data.FrameHeight / 2, GL_RED, GL_UNSIGNED_BYTE, Data.VData);
-
-        glClear(GL_COLOR_BUFFER_BIT);
-        glBindVertexArray(this->VAO);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-        SDL_GL_SwapWindow(Window);
-        SDL_Delay(16);
+    // Check for underflow
+    if (BufferOccupancy == 0)
+    {
+        this->bIsBuffering = true;
+        return -2;
     }
 
     return 0;
+}
+
+void Renderer::UpdateFullscreenQuadTexture()
+{
+    // Ensure 1-byte alignment
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    
+    // Bind YUV textures
+    
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, this->Frame->linesize[0]);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, this->TextureY);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0, this->Frame->width, this->Frame->height, GL_RED, GL_UNSIGNED_BYTE, this->Frame->data[0]);
+    
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, this->Frame->linesize[1]);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, this->TextureU);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0, this->Frame->width / 2, this->Frame->height / 2, GL_RED, GL_UNSIGNED_BYTE, this->Frame->data[1]);
+    
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, this->Frame->linesize[2]);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, this->TextureV);
+    glTexSubImage2D(GL_TEXTURE_2D,0,0,0, this->Frame->width / 2, this->Frame->height / 2, GL_RED, GL_UNSIGNED_BYTE, this->Frame->data[2]);
+    
+    // Reset row length
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+}
+
+void Renderer::Draw()
+{
+    // Render fullscreen quad to the screen
+
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glBindVertexArray(this->VAO);
+    
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+}
+
+Renderer::~Renderer()
+{
+    av_frame_free(&this->Frame);
 }

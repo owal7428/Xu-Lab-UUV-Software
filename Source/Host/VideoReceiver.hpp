@@ -1,25 +1,12 @@
 #ifndef HOST_VIDEO_RECEIVER_HPP_
 #define HOST_VIDEO_RECEIVER_HPP_
 
-extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/imgutils.h>
-}
+#include <atomic>
+#include <thread>
 
-// This explicitly assumes YUV420P pixel format
+#include "FrameBuffer.hpp"
 
-struct VideoFrameData
-{
-    int FrameWidth;
-    int FrameHeight;
-    uint8_t* YData;
-    int YLinesize;
-    uint8_t* UData;
-    int ULinesize;
-    uint8_t* VData;
-    int VLinesize;
-};
+// Asynchronous video receiver using FFMpeg
 
 class VideoReceiver
 {
@@ -29,59 +16,32 @@ private:
     AVStream* VideoStream;
     int VideoStreamIndex;
 
+    FrameBuffer* Buffer;
+
     AVPacket* Packet;
     AVFrame* Frame;
 
-public:
-    VideoReceiver()
-    {
-        FormatContext = nullptr;
-        CodecContext = nullptr;
-        VideoStream = nullptr;
-        VideoStreamIndex = 0;
+    std::atomic<bool> bNetLoop;
+    std::thread NetThread;
 
-        Packet = nullptr;
-        Frame = nullptr;
-    }
-
-    /**
-	 * @brief Initializes FFMpeg video receiver.
-	 * @param Url Url for network connection to video server.
-	 */
+    // Init FFMpeg data objects
     int Init(const char* Url);
 
+    void DecodeLoop();
+    
+public:
+    /**
+     * @brief Creates asynchronous FFMpeg video receiver.
+     * @param Url Url for network connection to video server.
+     * @param BufferPtr Pointer to frame buffer object to put frame objects in
+	 */
+    VideoReceiver(const char* Url, FrameBuffer* BufferPtr);
+    
     int GetVideoWidth();
-
+    
     int GetVideoHeight();
 
-    /**
-	 * @brief Reads next single packet over network connection.
-	 */
-    int ReadPacket();
-
-    /**
-	 * @brief Clears packet to default values.
-	 */
-    void ClearPacket();
-
-    /**
-	 * @brief Determines if the current packet contains video.
-     * @returns True if packet contains a video frame, false otherwise.
-	 */
-    bool IsPacketVideo();
-
-    /**
-	 * @brief Sends current packet to the decoder to be decoded.
-	 */
-    void EnqueueDecode();
-
-    /**
-	 * @brief Gets a raw video frame from the decoder.
-     * @returns Error code (0 if successful).
-	 */
-    int GetFrameFromDecoder();
-
-    VideoFrameData GetVideoFrameData();
+    void StartReceiveLoop();
 
     ~VideoReceiver();
 };

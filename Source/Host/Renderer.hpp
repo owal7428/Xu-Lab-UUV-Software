@@ -4,12 +4,9 @@
 #include <memory>
 
 #include <glad/gl.h>
-#include <SDL3/SDL.h>
 
+#include "FrameBuffer.hpp"
 #include "Shader.hpp"
-#include "VideoReceiver.hpp"
-
-// Render assumes all video frames are in YUV420P pixel format
 
 class Renderer
 {
@@ -23,15 +20,27 @@ private:
     GLuint TextureU;
     GLuint TextureV;
 
-    VideoReceiver* Receiver;
     std::unique_ptr<Shader> ShaderProgram;
 
+    FrameBuffer* Buffer;
+    AVFrame* Frame;
+
+    bool bIsBuffering;
+
+    int CheckBufferingStatus();
+
+    void UpdateFullscreenQuadTexture();
+
+    void Draw();
+
 public:
-    Renderer(int Width, int Height, VideoReceiver* ReceiverPtr, const char* ShaderName);
+    Renderer(int Width, int Height, FrameBuffer* BufferPtr, const char* ShaderName);
 
     void UpdateViewport(int Width, int Height);
 
-    int Render(SDL_Window* Window);
+    int Render();
+
+    ~Renderer();
 };
 
 #endif // HOST_RENDERER_HPP_

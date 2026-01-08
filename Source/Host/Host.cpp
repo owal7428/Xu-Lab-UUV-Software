@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include "FrameBuffer.hpp"
 #include "Renderer.hpp"
 #include "VideoReceiver.hpp"
 
@@ -17,11 +18,10 @@ int main(int argc, char* argv[])
 {
     const char* URL = "udp://127.0.0.1:1234?fifo_size=5000000&overrun_nonfatal=1";
 
-    VideoReceiver Receiver = VideoReceiver();
-    
-    if (Receiver.Init(URL) != 0)
-        return -1;
+    FrameBuffer Buffer = FrameBuffer(16);
+    VideoReceiver Receiver = VideoReceiver(URL, &Buffer);
 
+    // Get video resolution from stream
     int Width = Receiver.GetVideoWidth();
     int Height = Receiver.GetVideoHeight();
 
@@ -32,6 +32,8 @@ int main(int argc, char* argv[])
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", "SDL3 Failed to Initialize.", nullptr);
         return -1;
     }
+
+    SDL_Gamepad* Gamepad = nullptr;
 
     // Set OpenGL to version 3.3
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -62,12 +64,12 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    Renderer FrameRenderer = Renderer(Width, Height, &Receiver, "../Shaders/YUVToRGB");
-
     printf("Press keys or controller buttons. ESC or window close to quit.\n\n");
-
-    SDL_Gamepad* Gamepad = nullptr;
-
+    
+    Renderer FrameRenderer = Renderer(Width, Height, &Buffer, "../Shaders/YUVToRGB");
+    
+    Receiver.StartReceiveLoop();
+    
     bool IsRunning = true;
 
     // Begin event loop
@@ -167,7 +169,10 @@ int main(int argc, char* argv[])
         }
 
         // Render video
-        FrameRenderer.Render(Window);
+        FrameRenderer.Render();
+        SDL_GL_SwapWindow(Window);
+
+        SDL_Delay(16);
     }
 
     Cleanup(Window);
