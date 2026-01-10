@@ -18,13 +18,6 @@ int main(int argc, char* argv[])
 {
     const char* URL = "udp://127.0.0.1:1234?fifo_size=5000000&overrun_nonfatal=1";
 
-    FrameBuffer Buffer = FrameBuffer(16);
-    VideoReceiver Receiver = VideoReceiver(URL, &Buffer);
-
-    // Get video resolution from stream
-    int Width = Receiver.GetVideoWidth();
-    int Height = Receiver.GetVideoHeight();
-
     // Initialize SDL
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
@@ -42,7 +35,7 @@ int main(int argc, char* argv[])
 
     // Setup SDL window
     
-    SDL_Window* Window = SDL_CreateWindow("Host - Video Playback", Width, Height, SDL_WINDOW_OPENGL);
+    SDL_Window* Window = SDL_CreateWindow("Host - Video Playback", 1280, 720, SDL_WINDOW_OPENGL);
 
     if (!Window) 
     {
@@ -65,6 +58,13 @@ int main(int argc, char* argv[])
     }
 
     printf("Press keys or controller buttons. ESC or window close to quit.\n\n");
+
+    FrameBuffer Buffer = FrameBuffer(16);
+    VideoReceiver Receiver = VideoReceiver(URL, &Buffer);
+
+    // Get video resolution from stream
+    int Width = Receiver.GetVideoWidth();
+    int Height = Receiver.GetVideoHeight();
     
     Renderer FrameRenderer = Renderer(Width, Height, &Buffer, "../Shaders/YUVToRGB");
     
