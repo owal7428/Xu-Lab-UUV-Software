@@ -72,9 +72,13 @@ int main(int argc, char* argv[])
     
     bool IsRunning = true;
 
+    double NextRenderTime = 0.0f;
+
     // Begin event loop
     while (IsRunning) 
     {
+        double CurrentTime = static_cast<double>(SDL_GetTicks()) / 1000.0f;
+
         // Get input
 
         SDL_Event Event;
@@ -169,10 +173,10 @@ int main(int argc, char* argv[])
         }
 
         // Render video
-        if(FrameRenderer.Render() >= 0)
+        if (CurrentTime >= NextRenderTime)
         {
-            SDL_GL_SwapWindow(Window);
-            SDL_Delay(16);
+            if (FrameRenderer.Render(CurrentTime, NextRenderTime) >= 0)
+                SDL_GL_SwapWindow(Window);
         }
     }
 

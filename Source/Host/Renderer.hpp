@@ -38,7 +38,7 @@ public:
 
     void UpdateViewport(int Width, int Height);
 
-    int Render();
+    int Render(double CurrentTime, double &NextRenderTime);
 
     ~Renderer();
 };

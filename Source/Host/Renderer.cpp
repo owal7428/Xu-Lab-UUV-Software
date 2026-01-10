@@ -69,7 +69,7 @@ void Renderer::UpdateViewport(int Width, int Height)
     glViewport(0, 0, Width, Height);
 }
 
-int Renderer::Render()
+int Renderer::Render(double CurrentTime, double &NextRenderTime)
 {
     // NOTE: Render assumes all video frames are in YUV420P pixel format
 
@@ -80,6 +80,13 @@ int Renderer::Render()
 
     if (this->Buffer->PopFrame(this->Frame) == 0)
     {
+        // Fix this for now assuming H.264/H.265
+        AVRational Timebase{1, 90000};
+
+        double FrameDuration = static_cast<double>(this->Frame->duration) * av_q2d(Timebase);
+        
+        NextRenderTime = CurrentTime + FrameDuration;
+
         this->UpdateFullscreenQuadTexture();
         this->Draw();
     }
