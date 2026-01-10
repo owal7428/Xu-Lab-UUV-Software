@@ -76,15 +76,13 @@ int Renderer::Render()
     int BufferingStatus = this->CheckBufferingStatus();
 
     if (BufferingStatus < 0)
-    {
-        this->Draw();
         return BufferingStatus;
-    }
 
     if (this->Buffer->PopFrame(this->Frame) == 0)
-        UpdateFullscreenQuadTexture();
-    
-    this->Draw();
+    {
+        this->UpdateFullscreenQuadTexture();
+        this->Draw();
+    }
 
     av_frame_unref(this->Frame);
     

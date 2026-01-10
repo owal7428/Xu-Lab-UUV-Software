@@ -169,10 +169,11 @@ int main(int argc, char* argv[])
         }
 
         // Render video
-        FrameRenderer.Render();
-        SDL_GL_SwapWindow(Window);
-
-        SDL_Delay(16);
+        if(FrameRenderer.Render() >= 0)
+        {
+            SDL_GL_SwapWindow(Window);
+            SDL_Delay(16);
+        }
     }
 
     Cleanup(Window);
