@@ -33,7 +33,7 @@ public:
     /**
      * @brief Creates asynchronous FFMpeg video receiver.
      * @param Url Url for network connection to video server.
-     * @param BufferPtr Pointer to frame buffer object to put frame objects in
+     * @param BufferPtr Pointer to frame buffer object to put frame objects in.
 	 */
     VideoReceiver(const char* Url, FrameBuffer* BufferPtr);
     
@@ -41,6 +41,9 @@ public:
     
     int GetVideoHeight();
 
+    /**
+     * @brief Spawns new thread to continously receive and decode frames from network.
+	 */
     void StartReceiveLoop();
 
     ~VideoReceiver();

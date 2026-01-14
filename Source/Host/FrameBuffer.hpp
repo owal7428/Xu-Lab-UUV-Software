@@ -35,8 +35,17 @@ public:
 	 */
     int Push(AVFrame* Frame);
 
+    /**
+	 * @brief Pops a frame from the buffer.
+	 * @param RenderFrame Frame pointer reference to pop the frame into.
+     * @returns Error status
+	 */
     int PopFrame(AVFrame*& RenderFrame);
 
+    /**
+	 * @brief Gets the number of active frames in the buffer.
+     * @returns The number of active frames in the buffer as a size_t.
+	 */
     size_t GetOccupancy();
 
     ~FrameBuffer();
