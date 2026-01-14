@@ -25,6 +25,7 @@ private:
     FrameBuffer* Buffer;
     AVFrame* Frame;
 
+    size_t BufferingCutoff;
     bool bIsBuffering;
 
     int CheckBufferingStatus();
@@ -34,7 +35,7 @@ private:
     void Draw();
 
 public:
-    Renderer(int Width, int Height, FrameBuffer* BufferPtr, const char* ShaderName);
+    Renderer(int Width, int Height, size_t Cutoff, FrameBuffer* BufferPtr, const char* ShaderName);
 
     void UpdateViewport(int Width, int Height);
 

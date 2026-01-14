@@ -1,6 +1,6 @@
 #include "Renderer.hpp"
 
-Renderer::Renderer(int Width, int Height, FrameBuffer *BufferPtr, const char *ShaderName)
+Renderer::Renderer(int Width, int Height, size_t Cutoff, FrameBuffer *BufferPtr, const char *ShaderName)
 {
     this->Buffer = BufferPtr;
 
@@ -61,6 +61,7 @@ Renderer::Renderer(int Width, int Height, FrameBuffer *BufferPtr, const char *Sh
     InitTexture(this->TextureU, Width/2, Height/2);
     InitTexture(this->TextureV, Width/2, Height/2);
 
+    this->BufferingCutoff = Cutoff;
     this->bIsBuffering = true;
 }
 
@@ -103,7 +104,7 @@ int Renderer::CheckBufferingStatus()
     if (this->bIsBuffering)
     {
         // Check if we're done buffering
-        if (BufferOccupancy < 14)
+        if (BufferOccupancy < this->BufferingCutoff)
             return -1;
 
         this->bIsBuffering = false;

@@ -16,7 +16,30 @@ void Cleanup(SDL_Window* Window)
 
 int main(int argc, char* argv[]) 
 {
-    const char* URL = "udp://127.0.0.1:1234?fifo_size=5000000&overrun_nonfatal=1";
+    const char* URL = argc >= 2 ? argv[1] : "tcp://127.0.0.1:1234";
+
+    uint16_t BufferSize = 4;
+    uint16_t BufferingCutoff = 0;
+
+    if (argc >= 3)
+    {
+        uint16_t NewBufferSize = static_cast<uint16_t>(std::stoi(argv[2]));
+
+        if (NewBufferSize <= 0)
+            fprintf(stderr, "Buffer size is too small, setting to default: 4\n");
+        else
+            BufferSize = NewBufferSize;
+    }
+
+    if (argc >= 4)
+    {
+        uint16_t NewBufferingCutoff = static_cast<uint16_t>(std::stoi(argv[3]));
+
+        if (NewBufferingCutoff >= BufferSize)
+            fprintf(stderr, "Buffering cutoff is too big, setting to default: 0\n");
+        else
+            BufferingCutoff = NewBufferingCutoff;
+    }
 
     // Initialize SDL
 
@@ -59,14 +82,14 @@ int main(int argc, char* argv[])
 
     printf("Press keys or controller buttons. ESC or window close to quit.\n\n");
 
-    FrameBuffer Buffer = FrameBuffer(16);
+    FrameBuffer Buffer = FrameBuffer(BufferSize);
     VideoReceiver Receiver = VideoReceiver(URL, &Buffer);
 
     // Get video resolution from stream
     int Width = Receiver.GetVideoWidth();
     int Height = Receiver.GetVideoHeight();
     
-    Renderer FrameRenderer = Renderer(Width, Height, &Buffer, "../Shaders/YUVToRGB");
+    Renderer FrameRenderer = Renderer(Width, Height, BufferingCutoff, &Buffer, "../Shaders/YUVToRGB");
     
     Receiver.StartReceiveLoop();
     
