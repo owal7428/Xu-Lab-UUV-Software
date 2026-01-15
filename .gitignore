@@ -1,3 +1,9 @@
+# VScode config files
+.vscode
+
+# CMake build files
+build
+
 # Prerequisites
 *.d
 
