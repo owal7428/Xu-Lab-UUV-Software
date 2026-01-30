@@ -26,6 +26,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # Core project settings
 project(${CMAKE_PROJECT_NAME})
+
+# Set the CPU, Thumb mode, and FPU flags
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard")
+set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard")
+
+# Path to the linker script
+set(LDSCRIPT "${CMAKE_SOURCE_DIR}/STM32F446RCTX_FLASH.ld")
+
+# Add linker flags
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -T${LDSCRIPT} -Wl,-Map=${CMAKE_PROJECT_NAME}.map")
+
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Enable CMake support for ASM and C languages
@@ -33,6 +45,14 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
+
+target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
+    -mcpu=cortex-m4
+    -mthumb
+    -march=armv7e-m
+    -mfpu=fpv4-sp-d16
+    -mfloat-abi=hard
+)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
