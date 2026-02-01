@@ -1,3 +1,6 @@
+# Mac directory files
+*.DS_Store
+
 # VScode config files
 .vscode
 
