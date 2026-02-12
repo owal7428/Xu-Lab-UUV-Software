@@ -18,28 +18,22 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "freertos.h"
+#include "queue.h"
 #include "cmsis_os.h"
 #include "usb_device.h"
+#include <math.h>
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
+#define INITPAUSE 10000
+#define BAR30_ADDR 0x76<<1
 
-/* USER CODE END Includes */
+/* Define a queue length and element size */
+#define SERVO_QUEUE_LENGTH 10
+#define SERVO_QUEUE_ITEM_SIZE 3*sizeof(uint32_t)
 
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
+// Bar30 Calibration coefficients
+uint16_t C[7];
 
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
@@ -54,16 +48,29 @@ TIM_HandleTypeDef htim12;
 UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart5;
 
-/* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* USER CODE BEGIN PV */
+QueueHandle_t servoQueue;
 
-/* USER CODE END PV */
+/* Definitions for task space and handles */
+osThreadId_t ledTaskHandle;
+const osThreadAttr_t ledTask_attributes = {
+	.name = "LED_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t servoTaskHandle;
+const osThreadAttr_t servoTask_attributes = {
+	.name = "Servo_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t bar30TaskHandle;
+const osThreadAttr_t bar30Task_attributes = {
+	.name = "Bar30_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
@@ -76,16 +83,153 @@ static void MX_UART4_Init(void);
 static void MX_TIM12_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_UART5_Init(void);
-void StartDefaultTask(void *argument);
 
-/* USER CODE BEGIN PFP */
+static float sin_t[360];
+static float cos_t[360];
 
-/* USER CODE END PFP */
+/*
+ *  Convert angle in degrees to a pulse width between 900-2100 µs
+ *  For User convenience input 0 degrees is centered, +/- 80 degrees are the extremes
+ */
+uint16_t angle_to_pulse(int16_t angle)
+{
+	// clamp to bounds first to ensure valid inputs
+	if (angle > 80) angle = 80;
+	if (angle < -80) angle = -80;
 
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
+	// translating an angle between -80 to 80 degrees into 0 to 160 degrees for the math
+	angle += 80;
 
-/* USER CODE END 0 */
+	return 900 + ((uint32_t)angle * 1200) / 160;
+}
+
+/*
+ *  Test Task for checking correct flashing
+ */
+void LED_Task(void* argument)
+{
+	for (;;)
+	{
+		HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
+		osDelay(500);
+	}
+}
+
+void Servo_Init()
+{
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+	osDelay(INITPAUSE);
+}
+
+/*
+ *  Task Prototype that handles actuating a/the servos
+ *  Spawning one task per servo allows them to segment and control more easily independently
+ */
+void Servo_Task(void *argument)
+{
+	int16_t index = 0;
+	int16_t step = 1;
+	float reveivedValue[3];
+
+	Servo_Init();
+
+    // Check for any values on the queue
+	for (;;)
+	{
+		if (xQueueReceive(servoQueue, reveivedValue, 0) == pdPASS)
+		{
+			// process receivedValue
+			osDelay(5);
+		}
+		else
+		{
+			index = (index + step) % 360;
+			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, angle_to_pulse(lroundf(sin_t[index])));
+			osDelay(5);
+		}
+	}
+}
+
+// Initialize sensor and read PROM
+void Bar30_Init(void) {
+    uint8_t cmd;
+    HAL_Delay(10);
+
+    // 1. Reset sensor
+    cmd = 0x1E;
+    HAL_I2C_Master_Transmit(&hi2c1, BAR30_ADDR, &cmd, 1, 100);
+    HAL_Delay(10);
+
+    // 2. Read PROM calibration C1..C6
+    for(uint8_t i=0; i<6; i++) {
+        cmd = 0xA0 + (i+1)*2;
+        uint8_t buf[2];
+
+        HAL_I2C_Master_Transmit(&hi2c1, BAR30_ADDR, &cmd, 1, 100);
+        HAL_I2C_Master_Receive(&hi2c1, BAR30_ADDR, buf, 2, 100);
+
+        C[i+1] = (buf[0]<<8) | buf[1];
+    }
+}
+
+// Read ADC for a given conversion command (D1 or D2)
+uint32_t Bar30_ReadADC(uint8_t conv_cmd, uint16_t delay_ms) {
+    uint8_t cmd = conv_cmd;
+    uint8_t buf[3];
+
+    HAL_I2C_Master_Transmit(&hi2c1, BAR30_ADDR, &cmd, 1, 100);
+    HAL_Delay(delay_ms);
+
+    cmd = 0x00; // ADC read
+    HAL_I2C_Master_Transmit(&hi2c1, BAR30_ADDR, &cmd, 1, 100);
+    HAL_I2C_Master_Receive(&hi2c1, BAR30_ADDR, buf, 3, 100);
+
+    return ((uint32_t)buf[0]<<16) | ((uint32_t)buf[1]<<8) | buf[2];
+}
+
+// Read temperature (°C) and pressure (Pa)
+void Bar30_ReadTempPressure(float *temperature, float *pressure) {
+    // 1. Read raw ADC values
+    uint32_t D1 = Bar30_ReadADC(0x48, 10); // Pressure OSR=4096
+    uint32_t D2 = Bar30_ReadADC(0x58, 10); // Temperature OSR=4096
+
+    // 2. Compute calibrated values
+    int32_t dT = D2 - ((int32_t)C[5]<<8);
+    int32_t TEMP = 2000 + ((int64_t)dT * C[6])/8388608;
+
+    int64_t OFF = ((int64_t)C[2]<<17) + (((int64_t)C[4]*dT)>>6);
+    int64_t SENS = ((int64_t)C[1]<<16) + (((int64_t)C[3]*dT)>>7);
+    int32_t P = ((D1 * SENS / 2097152 - OFF)/8192);
+
+    *temperature = TEMP / 100.0f; // °C
+    *pressure = P;                // Pa
+}
+
+/*
+ *  Pressure/Temperature Sensor Task
+ */
+void Bar30_Task(void* argument)
+{
+	Bar30_Init();
+
+	float t0, p0, dt, dp, t, p = 0;
+	for (;;)
+	{
+		Bar30_ReadTempPressure(&t, &p);
+
+		dt = abs(t0 - t);
+		dp = abs(p0 - p);
+
+		if (dt > 0.5)
+		{
+			t0 = t;
+			p0 = p;
+		}
+
+		osDelay(10000); // poll every 10s to allow for changes in p or t
+	}
+}
 
 /**
   * @brief  The application entry point.
@@ -93,86 +237,44 @@ void StartDefaultTask(void *argument);
   */
 int main(void)
 {
+	// populate a global lookup table for sin and cos ahead of time for performance
+	for (int i=0; i<360; i++)
+	{
+		sin_t[i] = 80 * sin((2*M_PI*i)/360);
+		cos_t[i] = 80 * cos((2*M_PI*i)/360);
+	}
+	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+	HAL_Init();
 
-  /* USER CODE BEGIN 1 */
+	/* Configure the system clock */
+	SystemClock_Config();
 
-  /* USER CODE END 1 */
+	/* Initialize all configured peripherals */
+	MX_GPIO_Init();
+	MX_I2C1_Init();
+	MX_SPI1_Init();
+	MX_TIM2_Init();
+	MX_TIM3_Init();
+	MX_UART4_Init();
+	MX_TIM12_Init();
+	MX_SPI2_Init();
+	MX_UART5_Init();
 
-  /* MCU Configuration--------------------------------------------------------*/
+	/* Init scheduler */
+	osKernelInitialize();
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+	/* Create the thread(s) */
+	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
+	servoTaskHandle = osThreadNew(Servo_Task, NULL, &servoTask_attributes);
+	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
 
-  /* USER CODE BEGIN Init */
+	/* Start scheduler */
+	osKernelStart();
 
-  /* USER CODE END Init */
+	/* We should never get here as control is now taken by the scheduler */
 
-  /* Configure the system clock */
-  SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_I2C1_Init();
-  MX_SPI1_Init();
-  MX_TIM2_Init();
-  MX_TIM3_Init();
-  MX_UART4_Init();
-  MX_TIM12_Init();
-  MX_SPI2_Init();
-  MX_UART5_Init();
-  /* USER CODE BEGIN 2 */
-
-  /* USER CODE END 2 */
-
-  /* Init scheduler */
-  osKernelInitialize();
-
-  /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
-  /* USER CODE END RTOS_MUTEX */
-
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-  /* USER CODE END RTOS_SEMAPHORES */
-
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
-
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
-
-  /* Create the thread(s) */
-  /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  /* USER CODE END RTOS_THREADS */
-
-  /* USER CODE BEGIN RTOS_EVENTS */
-  /* add events, ... */
-  /* USER CODE END RTOS_EVENTS */
-
-  /* Start scheduler */
-  osKernelStart();
-
-  /* We should never get here as control is now taken by the scheduler */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-  }
-  /* USER CODE END 3 */
+	/* Infinite loop */
+	while (1) {}
 }
 
 /**
@@ -663,11 +765,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+	/* User can add his own implementation to report the HAL error return state */
+	__disable_irq();
+	while (1)
+	{
+	}
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
