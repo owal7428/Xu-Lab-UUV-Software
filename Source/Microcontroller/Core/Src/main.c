@@ -94,7 +94,7 @@ static float cos_t[360];
 
 /*
  *  Convert angle in degrees to a pulse width between 900-2100 µs
- *  For User convenience input 0 degrees is centered, +/- 80 degrees are the extremes
+ *  	For User convenience input 0 degrees is centered, +/- 80 degrees are the extremes
  */
 uint16_t angle_to_pulse(int16_t angle)
 {
@@ -106,6 +106,22 @@ uint16_t angle_to_pulse(int16_t angle)
 	angle += 80;
 
 	return 900 + ((uint32_t)angle * 1200) / 160;
+}
+
+/*
+ * Convert percentage between -100 to 100 into a pulse width between 1000 µs to 2000 µs
+ * 		-100 is reverse thrust while 100 is forward thrust
+ */
+uint16_t percent_to_pulse(int16_t percent)
+{
+	// clamp to bounds
+	if (percent > 100) percent = 100;
+	if (percent < -100) percent = -100;
+
+	// translate to range of 0 to 200 for pulse width math
+	percent += 100;
+
+	return 1000 + ((uint32_t)percent * 1000) / 200;
 }
 
 /*
@@ -157,15 +173,22 @@ void Thruster_Init()
 }
 
 /*
- *
+ *  Task to handle signaling control to thruster via PWM
+ *  	1000 µs = full reverse, 1500 µs = stopped, 2000 µs = full ahead
  */
 void Thruster_Task(void *argument)
 {
+	int16_t step = 0;
+	int16_t stride = 1;
 	Thruster_Init();
 
 	for (;;)
 	{
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 2000);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, percent_to_pulse(step));
+		step += stride;
+		if (step >= 100) stride*=-1;
+		if (step <= -100) stride*=-1;
+		osDelay(5);
 	}
 }
 
