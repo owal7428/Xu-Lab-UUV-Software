@@ -32,6 +32,15 @@
 // Bar30 Calibration coefficients
 uint16_t C[7];
 
+TIM_HandleTypeDef* tims[2];
+uint32_t channels[4] = {TIM_CHANNEL_1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_4};
+
+typedef struct
+{
+    TIM_HandleTypeDef *tim;
+    uint32_t channel;
+} ServoParams_t;
+ServoParams_t servoParams[2][4];
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
@@ -56,7 +65,7 @@ const osThreadAttr_t ledTask_attributes = {
 	.priority = (osPriority_t) osPriorityNormal,
 };
 
-osThreadId_t servoTaskHandle;
+osThreadId_t servoTaskHandle[8];
 const osThreadAttr_t servoTask_attributes = {
 	.name = "Servo_Task",
 	.stack_size = 128 * 4,  // stack in bytes
@@ -73,6 +82,13 @@ const osThreadAttr_t thrusterTask_attributes = {
 osThreadId_t bar30TaskHandle;
 const osThreadAttr_t bar30Task_attributes = {
 	.name = "Bar30_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t imuTaskHandle;
+const osThreadAttr_t imuTask_attributes = {
+	.name = "IMU_Task",
 	.stack_size = 128 * 4,  // stack in bytes
 	.priority = (osPriority_t) osPriorityNormal,
 };
@@ -136,10 +152,10 @@ void LED_Task(void* argument)
 	}
 }
 
-void Servo_Init()
+void Servo_Init(TIM_HandleTypeDef* tim, uint32_t channel)
 {
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
-	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+	__HAL_TIM_SET_COMPARE(tim, channel, 1500);
+	HAL_TIM_PWM_Start(tim, channel);
 	osDelay(INITPAUSE);
 }
 
@@ -149,21 +165,23 @@ void Servo_Init()
  */
 void Servo_Task(void *argument)
 {
+	ServoParams_t* params = (ServoParams_t*)argument;
 	int16_t index = 0;
 	int16_t step = 1;
 
-	Servo_Init();
+	Servo_Init(params->tim, params->channel);
 
 	for (;;)
 	{
 		index = (index + step) % 360;
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, angle_to_pulse(lroundf(sin_t[index])));
+		__HAL_TIM_SET_COMPARE(params->tim, params->channel, angle_to_pulse(lroundf(sin_t[index])));
 		osDelay(5);
 	}
 }
 
 /*
- *
+ *  Initialize thruster by ensuring that PWM is to 1500 µs and a delay is enforced
+ *  	delay required for the thruster to start
  */
 void Thruster_Init()
 {
@@ -250,7 +268,7 @@ void Bar30_ReadTempPressure(float *temperature, float *pressure) {
     int32_t P = ((D1 * SENS / 2097152 - OFF)/8192);
 
     *temperature = TEMP / 100.0f; // °C
-    *pressure = P / 10000.0f;      // kPa
+    *pressure = P;      		  // Pa
 }
 
 /*
@@ -287,6 +305,17 @@ void Bar30_Task(void* argument)
 	}
 }
 
+/*
+ *  Task for reading from on-board IMU (accelerometer & gyroscope) on SPI as chips 1 & 2
+ */
+void IMU_Task(void* argument)
+{
+	for (;;)
+	{
+		//
+	}
+}
+
 /**
   * @brief  The application entry point.
   * @retval int
@@ -299,6 +328,10 @@ int main(void)
 		sin_t[i] = 80 * sin((2*M_PI*i)/360);
 		cos_t[i] = 80 * cos((2*M_PI*i)/360);
 	}
+
+	tims[0] = &htim2;
+	tims[1] = &htim3;
+
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
 
@@ -321,9 +354,20 @@ int main(void)
 
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
-//	servoTaskHandle = osThreadNew(Servo_Task, NULL, &servoTask_attributes);
 //	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
 //	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
+//	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
+
+	// start seperate tasks for all 8 servos across both timers and each of their 4 channels
+	for (int i=0; i<2; i++)
+	{
+		for (int k=0; k<4; k++)
+		{
+			servoParams[i][k].tim = tims[i];
+			servoParams[i][k].channel = channels[k];
+			servoTaskHandle[(i*4)+k] = osThreadNew(Servo_Task, &servoParams[i][k], &servoTask_attributes);
+		}
+	}
 
 	/* Start scheduler */
 	osKernelStart();
