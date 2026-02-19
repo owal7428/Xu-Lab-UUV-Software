@@ -1,4 +1,3 @@
-/* USER CODE BEGIN Header */
 /**
   ******************************************************************************
   * @file           : main.c
@@ -15,7 +14,6 @@
   *
   ******************************************************************************
   */
-/* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "freertos.h"
@@ -24,7 +22,7 @@
 #include "usb_device.h"
 #include <math.h>
 
-#define INITPAUSE 10000
+#define INITPAUSE 7000 // 7.0 s
 #define BAR30_ADDR 0x76<<1
 
 /* Define a queue length and element size */
@@ -61,6 +59,13 @@ const osThreadAttr_t ledTask_attributes = {
 osThreadId_t servoTaskHandle;
 const osThreadAttr_t servoTask_attributes = {
 	.name = "Servo_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t thrusterTaskHandle;
+const osThreadAttr_t thrusterTask_attributes = {
+	.name = "Thruster_Task",
 	.stack_size = 128 * 4,  // stack in bytes
 	.priority = (osPriority_t) osPriorityNormal,
 };
@@ -130,28 +135,43 @@ void Servo_Task(void *argument)
 {
 	int16_t index = 0;
 	int16_t step = 1;
-	float reveivedValue[3];
 
 	Servo_Init();
 
-    // Check for any values on the queue
 	for (;;)
 	{
-		if (xQueueReceive(servoQueue, reveivedValue, 0) == pdPASS)
-		{
-			// process receivedValue
-			osDelay(5);
-		}
-		else
-		{
-			index = (index + step) % 360;
-			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, angle_to_pulse(lroundf(sin_t[index])));
-			osDelay(5);
-		}
+		index = (index + step) % 360;
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, angle_to_pulse(lroundf(sin_t[index])));
+		osDelay(5);
 	}
 }
 
-// Initialize sensor and read PROM
+/*
+ *
+ */
+void Thruster_Init()
+{
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 1500);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+	osDelay(INITPAUSE);
+}
+
+/*
+ *
+ */
+void Thruster_Task(void *argument)
+{
+	Thruster_Init();
+
+	for (;;)
+	{
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 2000);
+	}
+}
+
+/*
+ *  Initialize sensor and read PROM
+ */
 void Bar30_Init(void) {
     uint8_t cmd;
     HAL_Delay(10);
@@ -173,7 +193,9 @@ void Bar30_Init(void) {
     }
 }
 
-// Read ADC for a given conversion command (D1 or D2)
+/*
+ *  Read ADC for a given conversion command (D1 or D2)
+ */
 uint32_t Bar30_ReadADC(uint8_t conv_cmd, uint16_t delay_ms) {
     uint8_t cmd = conv_cmd;
     uint8_t buf[3];
@@ -188,7 +210,9 @@ uint32_t Bar30_ReadADC(uint8_t conv_cmd, uint16_t delay_ms) {
     return ((uint32_t)buf[0]<<16) | ((uint32_t)buf[1]<<8) | buf[2];
 }
 
-// Read temperature (°C) and pressure (Pa)
+/*
+ *  Read temperature (°C) and pressure (Pa)
+ */
 void Bar30_ReadTempPressure(float *temperature, float *pressure) {
     // 1. Read raw ADC values
     uint32_t D1 = Bar30_ReadADC(0x48, 10); // Pressure OSR=4096
@@ -203,7 +227,7 @@ void Bar30_ReadTempPressure(float *temperature, float *pressure) {
     int32_t P = ((D1 * SENS / 2097152 - OFF)/8192);
 
     *temperature = TEMP / 100.0f; // °C
-    *pressure = P;                // Pa
+    *pressure = P / 10000.0f;      // kPa
 }
 
 /*
@@ -218,14 +242,23 @@ void Bar30_Task(void* argument)
 	{
 		Bar30_ReadTempPressure(&t, &p);
 
-		dt = abs(t0 - t);
-		dp = abs(p0 - p);
-
-		if (dt > 0.5)
+		// blink a number of times coresponding to temperature in celcius starting at 0
+		for (int i=0; (float)i<t; i++)
 		{
-			t0 = t;
-			p0 = p;
+			HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
+			osDelay(500);
+			HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
+			osDelay(500);
 		}
+
+//		// blink a number of times coresponding to pressure in kPa/1000 starting at 0
+//		for (int i=0; (float)i<p; i++)
+//		{
+//			HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
+//			osDelay(500);
+//			HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
+//			osDelay(500);
+//		}
 
 		osDelay(10000); // poll every 10s to allow for changes in p or t
 	}
@@ -265,8 +298,9 @@ int main(void)
 
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
-	servoTaskHandle = osThreadNew(Servo_Task, NULL, &servoTask_attributes);
-	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
+//	servoTaskHandle = osThreadNew(Servo_Task, NULL, &servoTask_attributes);
+//	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
+//	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
 
 	/* Start scheduler */
 	osKernelStart();
@@ -330,14 +364,6 @@ void SystemClock_Config(void)
   */
 static void MX_I2C1_Init(void)
 {
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
   hi2c1.Init.ClockSpeed = 400000;
   hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
@@ -351,10 +377,6 @@ static void MX_I2C1_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C1_Init 2 */
-
-  /* USER CODE END I2C1_Init 2 */
-
 }
 
 /**
@@ -364,14 +386,6 @@ static void MX_I2C1_Init(void)
   */
 static void MX_SPI1_Init(void)
 {
-
-  /* USER CODE BEGIN SPI1_Init 0 */
-
-  /* USER CODE END SPI1_Init 0 */
-
-  /* USER CODE BEGIN SPI1_Init 1 */
-
-  /* USER CODE END SPI1_Init 1 */
   /* SPI1 parameter configuration*/
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
@@ -389,10 +403,6 @@ static void MX_SPI1_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI1_Init 2 */
-
-  /* USER CODE END SPI1_Init 2 */
-
 }
 
 /**
@@ -402,14 +412,6 @@ static void MX_SPI1_Init(void)
   */
 static void MX_SPI2_Init(void)
 {
-
-  /* USER CODE BEGIN SPI2_Init 0 */
-
-  /* USER CODE END SPI2_Init 0 */
-
-  /* USER CODE BEGIN SPI2_Init 1 */
-
-  /* USER CODE END SPI2_Init 1 */
   /* SPI2 parameter configuration*/
   hspi2.Instance = SPI2;
   hspi2.Init.Mode = SPI_MODE_SLAVE;
@@ -426,10 +428,6 @@ static void MX_SPI2_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI2_Init 2 */
-
-  /* USER CODE END SPI2_Init 2 */
-
 }
 
 /**
@@ -439,17 +437,9 @@ static void MX_SPI2_Init(void)
   */
 static void MX_TIM2_Init(void)
 {
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 83;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
@@ -486,11 +476,8 @@ static void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM2_Init 2 */
 
-  /* USER CODE END TIM2_Init 2 */
   HAL_TIM_MspPostInit(&htim2);
-
 }
 
 /**
@@ -500,17 +487,9 @@ static void MX_TIM2_Init(void)
   */
 static void MX_TIM3_Init(void)
 {
-
-  /* USER CODE BEGIN TIM3_Init 0 */
-
-  /* USER CODE END TIM3_Init 0 */
-
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM3_Init 1 */
-
-  /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 83;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
@@ -547,9 +526,7 @@ static void MX_TIM3_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM3_Init 2 */
 
-  /* USER CODE END TIM3_Init 2 */
   HAL_TIM_MspPostInit(&htim3);
 
 }
@@ -561,16 +538,8 @@ static void MX_TIM3_Init(void)
   */
 static void MX_TIM12_Init(void)
 {
-
-  /* USER CODE BEGIN TIM12_Init 0 */
-
-  /* USER CODE END TIM12_Init 0 */
-
   TIM_OC_InitTypeDef sConfigOC = {0};
 
-  /* USER CODE BEGIN TIM12_Init 1 */
-
-  /* USER CODE END TIM12_Init 1 */
   htim12.Instance = TIM12;
   htim12.Init.Prescaler = 0;
   htim12.Init.CounterMode = TIM_COUNTERMODE_UP;
@@ -589,11 +558,8 @@ static void MX_TIM12_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM12_Init 2 */
 
-  /* USER CODE END TIM12_Init 2 */
   HAL_TIM_MspPostInit(&htim12);
-
 }
 
 /**
@@ -603,14 +569,6 @@ static void MX_TIM12_Init(void)
   */
 static void MX_UART4_Init(void)
 {
-
-  /* USER CODE BEGIN UART4_Init 0 */
-
-  /* USER CODE END UART4_Init 0 */
-
-  /* USER CODE BEGIN UART4_Init 1 */
-
-  /* USER CODE END UART4_Init 1 */
   huart4.Instance = UART4;
   huart4.Init.BaudRate = 115200;
   huart4.Init.WordLength = UART_WORDLENGTH_8B;
@@ -623,10 +581,6 @@ static void MX_UART4_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN UART4_Init 2 */
-
-  /* USER CODE END UART4_Init 2 */
-
 }
 
 /**
@@ -636,14 +590,6 @@ static void MX_UART4_Init(void)
   */
 static void MX_UART5_Init(void)
 {
-
-  /* USER CODE BEGIN UART5_Init 0 */
-
-  /* USER CODE END UART5_Init 0 */
-
-  /* USER CODE BEGIN UART5_Init 1 */
-
-  /* USER CODE END UART5_Init 1 */
   huart5.Instance = UART5;
   huart5.Init.BaudRate = 115200;
   huart5.Init.WordLength = UART_WORDLENGTH_8B;
@@ -656,10 +602,6 @@ static void MX_UART5_Init(void)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN UART5_Init 2 */
-
-  /* USER CODE END UART5_Init 2 */
-
 }
 
 /**
@@ -670,9 +612,6 @@ static void MX_UART5_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOH_CLK_ENABLE();
@@ -706,34 +645,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
-}
-
-/* USER CODE BEGIN 4 */
-
-/* USER CODE END 4 */
-
-/* USER CODE BEGIN Header_StartDefaultTask */
-/**
-  * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void *argument)
-{
-  /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
-  /* USER CODE BEGIN 5 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END 5 */
 }
 
 /**
@@ -746,16 +657,10 @@ void StartDefaultTask(void *argument)
   */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-  /* USER CODE BEGIN Callback 0 */
-
-  /* USER CODE END Callback 0 */
   if (htim->Instance == TIM6)
   {
     HAL_IncTick();
   }
-  /* USER CODE BEGIN Callback 1 */
-
-  /* USER CODE END Callback 1 */
 }
 
 /**
@@ -764,13 +669,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   */
 void Error_Handler(void)
 {
-  /* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
-	while (1)
-	{
-	}
-  /* USER CODE END Error_Handler_Debug */
+	while (1) {}
 }
 #ifdef USE_FULL_ASSERT
 /**
