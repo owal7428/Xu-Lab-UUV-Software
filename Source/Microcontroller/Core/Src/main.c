@@ -21,6 +21,7 @@
 #include "cmsis_os.h"
 #include "usb_device.h"
 #include <math.h>
+#include <stdbool.h>
 
 #define INITPAUSE 7000 // 7.0 s
 #define BAR30_ADDR 0x76<<1
@@ -28,6 +29,28 @@
 /* Define a queue length and element size */
 #define SERVO_QUEUE_LENGTH 10
 #define SERVO_QUEUE_ITEM_SIZE 3*sizeof(uint32_t)
+#define SERVO_STEP_SIZE 2880
+
+// definitions for SPI high and low pulling
+#define CS_PORT GPIOC
+#define ACC_CS_PIN  SPI1_CS1_Pin
+#define GYRO_CS_PIN SPI1_CS2_Pin
+
+void ACC_CS_LOW() {
+    HAL_GPIO_WritePin(CS_PORT, ACC_CS_PIN, GPIO_PIN_RESET);
+}
+
+void ACC_CS_HIGH() {
+    HAL_GPIO_WritePin(CS_PORT, ACC_CS_PIN, GPIO_PIN_SET);
+}
+
+void GYRO_CS_LOW() {
+	HAL_GPIO_WritePin(CS_PORT, GYRO_CS_PIN, GPIO_PIN_RESET);
+}
+
+void GYRO_CS_HIGH() {
+	HAL_GPIO_WritePin(CS_PORT, GYRO_CS_PIN, GPIO_PIN_SET);
+}
 
 // Bar30 Calibration coefficients
 uint16_t C[7];
@@ -56,6 +79,7 @@ UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart5;
 
 QueueHandle_t servoQueue;
+osMutexId_t spiMutex;
 
 /* Definitions for task space and handles */
 osThreadId_t ledTaskHandle;
@@ -86,8 +110,8 @@ const osThreadAttr_t bar30Task_attributes = {
 	.priority = (osPriority_t) osPriorityNormal,
 };
 
-osThreadId_t imuTaskHandle;
-const osThreadAttr_t imuTask_attributes = {
+osThreadId_t accTaskHandle;
+const osThreadAttr_t accTask_attributes = {
 	.name = "IMU_Task",
 	.stack_size = 128 * 4,  // stack in bytes
 	.priority = (osPriority_t) osPriorityNormal,
@@ -105,8 +129,8 @@ static void MX_TIM12_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_UART5_Init(void);
 
-static float sin_t[360];
-static float cos_t[360];
+static float sin_t[SERVO_STEP_SIZE];
+static float cos_t[SERVO_STEP_SIZE];
 
 /*
  *  Convert angle in degrees to a pulse width between 900-2100 µs
@@ -173,9 +197,9 @@ void Servo_Task(void *argument)
 
 	for (;;)
 	{
-		index = (index + step) % 360;
+		index = (index + step) % SERVO_STEP_SIZE;
 		__HAL_TIM_SET_COMPARE(params->tim, params->channel, angle_to_pulse(lroundf(sin_t[index])));
-		osDelay(5);
+		osDelay(1);
 	}
 }
 
@@ -306,15 +330,183 @@ void Bar30_Task(void* argument)
 }
 
 /*
- *  Task for reading from on-board IMU (accelerometer & gyroscope) on SPI as chips 1 & 2
+ *  Write to IMU (for initializing)
  */
-void IMU_Task(void* argument)
+void ACC_WriteReg(uint8_t reg, uint8_t data)
 {
+    uint8_t tx[2];
+    tx[0] = reg & 0x7F;   // write mode
+    tx[1] = data;
+
+    osMutexAcquire(spiMutex, osWaitForever);
+
+    ACC_CS_LOW();
+    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+    ACC_CS_HIGH();
+
+    osMutexRelease(spiMutex);
+}
+
+void GYRO_WriteReg(uint8_t reg, uint8_t data)
+{
+    uint8_t tx[2];
+    tx[0] = reg & 0x7F;   // write mode
+    tx[1] = data;
+
+    osMutexAcquire(spiMutex, osWaitForever);
+
+    GYRO_CS_LOW();
+    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+    GYRO_CS_HIGH();
+
+    osMutexRelease(spiMutex);
+}
+
+/*
+ *  for checking IMU online
+ */
+uint8_t ACC_ReadReg(uint8_t reg)
+{
+    uint8_t tx[2];
+    uint8_t rx[2];
+
+    tx[0] = reg | 0x80;
+    tx[1] = 0x00;
+
+    osMutexAcquire(spiMutex, osWaitForever);
+
+    ACC_CS_LOW();
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
+    ACC_CS_HIGH();
+
+    osMutexRelease(spiMutex);
+
+    return rx[1];
+}
+
+uint8_t GYRO_ReadReg(uint8_t reg)
+{
+    uint8_t tx[2];
+    uint8_t rx[2];
+
+    tx[0] = reg | 0x80;
+    tx[1] = 0x00;
+
+    osMutexAcquire(spiMutex, osWaitForever);
+
+    GYRO_CS_LOW();
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
+    GYRO_CS_HIGH();
+
+    osMutexRelease(spiMutex);
+
+    return rx[1];
+}
+
+/*
+ *  For retrieving either accelerometer or gyroscope
+ */
+void ACC_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
+{
+    uint8_t tx[length + 1];
+    uint8_t rx[length + 1];
+
+    tx[0] = reg | 0xC0;   // read + auto increment
+    memset(&tx[1], 0, length);
+
+    osMutexAcquire(spiMutex, osWaitForever);
+
+    ACC_CS_LOW();
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
+    ACC_CS_HIGH();
+
+    osMutexRelease(spiMutex);
+
+    memcpy(buffer, &rx[1], length);
+}
+
+void GYRO_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
+{
+    uint8_t tx[length + 1];
+    uint8_t rx[length + 1];
+
+    tx[0] = reg | 0x80;   // read + auto increment
+    memset(&tx[1], 0, length);
+
+    osMutexAcquire(spiMutex, osWaitForever);
+
+    GYRO_CS_LOW();
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
+    GYRO_CS_HIGH();
+
+    osMutexRelease(spiMutex);
+
+    memcpy(buffer, &rx[1], length);
+}
+
+/*
+ *  Initialise SPI connection and check that Accelerometer is available
+ */
+bool ACC_Init()
+{
+	osDelay(1);
+	ACC_CS_LOW(); ACC_CS_HIGH(); // Put Accelerometer CS pin in SPI
+	osDelay(1);
+	ACC_ReadReg(0x00); // dummy read to activate SPI mode
+	osDelay(1);
+	ACC_WriteReg(0x7D, 4); // write to acc_pwr_ctrl for normal mode
+	osDelay(1);
+
+	int16_t who = ACC_ReadReg(0x00); // read actual chip ID
+	return (who == 0x1E);
+}
+
+bool GYRO_Init()
+{
+	osDelay(1);
+	GYRO_ReadReg(0x00); // Dummy read to activate SPI
+	osDelay(1);
+	if (GYRO_ReadReg(0x00) != 0x0F) return false; // device not found
+	osDelay(1);
+	GYRO_WriteReg(0x0F, 0x00); // Set gyro range to ±2000 dps
+	osDelay(1);
+	GYRO_WriteReg(0x10, 0x04); 	// Set bandwidth + ODR (e.g. 100Hz)
+	osDelay(1);
+    return true;
+}
+
+/*
+ *  Task for reading from on-board IMU (accelerometer & gyroscope) on SPI
+ */
+void ACC_Task(void *argument)
+{
+	uint8_t buffer[6];
+	int16_t raw_ax, raw_ay, raw_az;
+	int16_t raw_gx, raw_gy, raw_gz;
+	float ax, ay, az;
+	float gx, gy, gz;
+
+	// constants to convert to gs and dps
+	float convacc = 0.000061f;
+	float convgyro = 0.00875f;
+
+	ACC_Init();
+	if (!GYRO_Init()) return;
+
 	for (;;)
 	{
-		//
+		// gyroscope data
+		GYRO_Read(0x02, buffer, 6);
+		raw_gx = (int16_t)(buffer[1] << 8 | buffer[0]);
+		raw_gy = (int16_t)(buffer[3] << 8 | buffer[2]);
+		raw_gz = (int16_t)(buffer[5] << 8 | buffer[4]);
+
+		gx = raw_gx * convgyro;
+		gy = raw_gy * convgyro;
+		gz = raw_gz * convgyro;
 	}
 }
+
 
 /**
   * @brief  The application entry point.
@@ -322,11 +514,13 @@ void IMU_Task(void* argument)
   */
 int main(void)
 {
+	spiMutex = osMutexNew(NULL);
+
 	// populate a global lookup table for sin and cos ahead of time for performance
-	for (int i=0; i<360; i++)
+	for (int i=0; i<SERVO_STEP_SIZE; i++)
 	{
-		sin_t[i] = 80 * sin((2*M_PI*i)/360);
-		cos_t[i] = 80 * cos((2*M_PI*i)/360);
+		sin_t[i] = 80 * sin((2*M_PI*i)/SERVO_STEP_SIZE);
+		cos_t[i] = 80 * cos((2*M_PI*i)/SERVO_STEP_SIZE);
 	}
 
 	tims[0] = &htim2;
@@ -354,20 +548,21 @@ int main(void)
 
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
+	accTaskHandle = osThreadNew(ACC_Task, NULL, &accTask_attributes);
 //	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
 //	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
 //	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
 
 	// start seperate tasks for all 8 servos across both timers and each of their 4 channels
-	for (int i=0; i<2; i++)
-	{
-		for (int k=0; k<4; k++)
-		{
-			servoParams[i][k].tim = tims[i];
-			servoParams[i][k].channel = channels[k];
-			servoTaskHandle[(i*4)+k] = osThreadNew(Servo_Task, &servoParams[i][k], &servoTask_attributes);
-		}
-	}
+//	for (int i=0; i<2; i++)
+//	{
+//		for (int k=0; k<4; k++)
+//		{
+//			servoParams[i][k].tim = tims[i];
+//			servoParams[i][k].channel = channels[k];
+//			servoTaskHandle[(i*4)+k] = osThreadNew(Servo_Task, &servoParams[i][k], &servoTask_attributes);
+//		}
+//	}
 
 	/* Start scheduler */
 	osKernelStart();
@@ -460,6 +655,8 @@ static void MX_SPI1_Init(void)
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+//  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
+//  hspi1.Init.CLKPhase    = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
@@ -691,7 +888,8 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LED_Output_GPIO_Port, LED_Output_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, SPI1_CS0_Pin|SPI1_CS1_Pin|SPI1_CS2_Pin|SPI1_CS3_Pin, GPIO_PIN_RESET);
+//  HAL_GPIO_WritePin(GPIOC, SPI1_CS0_Pin|SPI1_CS1_Pin|SPI1_CS2_Pin|SPI1_CS3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, SPI1_CS0_Pin|SPI1_CS1_Pin|SPI1_CS2_Pin|SPI1_CS3_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pins : PC0 PC1 PC2 */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2;
