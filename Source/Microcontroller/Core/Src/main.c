@@ -35,6 +35,7 @@
 #define CS_PORT GPIOC
 #define ACC_CS_PIN  SPI1_CS1_Pin
 #define GYRO_CS_PIN SPI1_CS2_Pin
+#define MAG_CS_PIN SPI1_CS3_Pin
 
 void ACC_CS_LOW() {
     HAL_GPIO_WritePin(CS_PORT, ACC_CS_PIN, GPIO_PIN_RESET);
@@ -50,6 +51,14 @@ void GYRO_CS_LOW() {
 
 void GYRO_CS_HIGH() {
 	HAL_GPIO_WritePin(CS_PORT, GYRO_CS_PIN, GPIO_PIN_SET);
+}
+
+void MAG_CS_LOW() {
+	HAL_GPIO_WritePin(CS_PORT, MAG_CS_PIN, GPIO_PIN_RESET);
+}
+
+void MAG_CS_HIGH() {
+	HAL_GPIO_WritePin(CS_PORT, MAG_CS_PIN, GPIO_PIN_SET);
 }
 
 // Bar30 Calibration coefficients
@@ -110,9 +119,16 @@ const osThreadAttr_t bar30Task_attributes = {
 	.priority = (osPriority_t) osPriorityNormal,
 };
 
-osThreadId_t accTaskHandle;
-const osThreadAttr_t accTask_attributes = {
+osThreadId_t imuTaskHandle;
+const osThreadAttr_t imuTask_attributes = {
 	.name = "IMU_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t magTaskHandle;
+const osThreadAttr_t magTask_attributes = {
+	.name = "Mag_Task",
 	.stack_size = 128 * 4,  // stack in bytes
 	.priority = (osPriority_t) osPriorityNormal,
 };
@@ -355,11 +371,11 @@ void GYRO_WriteReg(uint8_t reg, uint8_t data)
     tx[1] = data;
 
     osMutexAcquire(spiMutex, osWaitForever);
-
     GYRO_CS_LOW();
-    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
-    GYRO_CS_HIGH();
 
+    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+
+    GYRO_CS_HIGH();
     osMutexRelease(spiMutex);
 }
 
@@ -375,11 +391,11 @@ uint8_t GYRO_ReadReg(uint8_t reg)
     tx[1] = 0x00;
 
     osMutexAcquire(spiMutex, osWaitForever);
-
     GYRO_CS_LOW();
-    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
-    GYRO_CS_HIGH();
 
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
+
+    GYRO_CS_HIGH();
     osMutexRelease(spiMutex);
 
     return rx[1];
@@ -397,11 +413,11 @@ void GYRO_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
     memset(&tx[1], 0, length);
 
     osMutexAcquire(spiMutex, osWaitForever);
-
     GYRO_CS_LOW();
-    HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
-    GYRO_CS_HIGH();
 
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
+
+    GYRO_CS_HIGH();
     osMutexRelease(spiMutex);
 
     memcpy(buffer, &rx[1], length);
@@ -426,16 +442,13 @@ bool GYRO_Init()
 /*
  *  Task for reading from on-board IMU (accelerometer & gyroscope) on SPI
  */
-void ACC_Task(void *argument)
+void IMU_Task(void *argument)
 {
 	uint8_t buffer[6];
-	int16_t raw_ax, raw_ay, raw_az;
 	int16_t raw_gx, raw_gy, raw_gz;
-	float ax, ay, az;
 	float gx, gy, gz;
 
-	// constants to convert to gs and dps
-	float convacc = 24.0f / 32768.0f;
+	// constants to convert to dps
 	float convgyro = 500.0f / 32768.0f;
 
 	if (!GYRO_Init()) return;
@@ -454,6 +467,129 @@ void ACC_Task(void *argument)
 
 		osDelay(10); // 10ms delay = 100Hz
 	}
+}
+
+void Mag_Write(uint8_t reg, uint8_t data)
+{
+	uint8_t tx[2];
+	tx[0] = reg & 0x7F;   // write mode
+	tx[1] = data;
+
+	osMutexAcquire(spiMutex, osWaitForever);
+	MAG_CS_LOW();
+
+	HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+
+	MAG_CS_HIGH();
+	osMutexRelease(spiMutex);
+}
+
+uint8_t Mag_ReadReg(uint8_t reg)
+{
+	uint8_t tx[2];
+	uint8_t rx[2];
+
+	tx[0] = reg | 0x80;
+	tx[1] = 0x00;
+
+	osMutexAcquire(spiMutex, osWaitForever);
+	MAG_CS_LOW();
+
+	HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
+
+	MAG_CS_HIGH();
+	osMutexRelease(spiMutex);
+
+	return rx[1];
+}
+
+void Mag_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
+{
+    uint8_t tx[length + 1];
+    uint8_t rx[length + 1];
+
+    tx[0] = reg | 0x80;   // read + auto increment
+    memset(&tx[1], 0, length);
+
+    osMutexAcquire(spiMutex, osWaitForever);
+    MAG_CS_LOW();
+
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
+
+    MAG_CS_HIGH();
+    osMutexRelease(spiMutex);
+
+    memcpy(buffer, &rx[1], length);
+}
+
+bool Init_Mag()
+{
+	Mag_Write(0x09, 0x10); // set magnetometer
+	osDelay(1);
+	Mag_Write(0x09, 0x20); // set automatic set/reset
+	osDelay(1);
+
+//	Mag_Write(0x0A, 0x00); // set bandwidth to 100 Hz
+//	Mag_Write(0x0B, 0x0F); // set reading to 100 Hz
+	return (Mag_ReadReg(0x2F) == 0x30); // return device ID to check online
+}
+
+/*
+ *  Top-level task for reading from on-board magnetometer heading sensor
+ */
+void Mag_Task(void *argument)
+{
+	uint8_t buffer[7];
+	uint32_t raw_x, raw_y, raw_z;
+	int32_t x,y,z;
+	float x_gauss = x / 16384.0f;
+	float y_gauss = y / 16384.0f;
+	float z_gauss = z / 16384.0f;
+	float heading;
+
+	if (!Init_Mag()) return;
+
+	for (;;)
+	{
+		Mag_Write(0x09,0x01); // initiate measurement
+		while (!(Mag_ReadReg(0x08) & 0x01)); // wait for reading to be ready
+		Mag_Read(0x00, buffer, 7); // read all 7 registers of data (0x00 - 0x06)
+
+		// take 18 bit data
+		raw_x =
+		    ((uint32_t)buffer[0] << 10) |
+		    ((uint32_t)buffer[1] << 2)  |
+		    ((buffer[6] >> 6) & 0x03);
+
+		raw_y =
+		    ((uint32_t)buffer[2] << 10) |
+		    ((uint32_t)buffer[3] << 2)  |
+		    ((buffer[6] >> 6) & 0x03);
+
+		raw_z =
+		    ((uint32_t)buffer[4] << 10) |
+		    ((uint32_t)buffer[5] << 2)  |
+		    ((buffer[6] >> 6) & 0x03);
+
+		// convert to signed by subtracting mid-point
+		x = raw_x - 131072;
+		y = raw_y - 131072;
+		z = raw_z - 131072;
+
+		// convert to gaussian units
+		x_gauss = x / 16384.0f;
+		y_gauss = y / 16384.0f;
+		z_gauss = z / 16384.0f;
+
+		// convert to a heading with 0 degrees north
+		float heading = atan2f(y, x) * (180.0f / M_PI);
+		if (heading < 0)
+			heading += 360;
+
+		osDelay(9); // reading at 100 Hz so need to read every 9 ms and give 1 ms time to communicate (10 ms total)
+	}
+
+	return;
 }
 
 
@@ -493,17 +629,22 @@ int main(void)
 	/* Init scheduler */
 	osKernelInitialize();
 
+	/* force all pins high as soon as possible for SPI */
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS1_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS2_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS3_Pin, GPIO_PIN_SET);
+
 	/* Enforce only one device to communicate over SPI line at a time */
 	spiMutex = osMutexNew(NULL);
 
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
-//	accTaskHandle = osThreadNew(ACC_Task, NULL, &accTask_attributes);
 //	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
 //	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
 //	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
+	magTaskHandle = osThreadNew(Mag_Task, NULL, &magTask_attributes);
 
-	// start seperate tasks for all 8 servos across both timers and each of their 4 channels
+	/* start separate tasks for all 8 servos across both timers and each of their 4 channels */
 //	for (int i=0; i<2; i++)
 //	{
 //		for (int k=0; k<4; k++)
