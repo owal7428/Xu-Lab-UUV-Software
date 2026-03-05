@@ -278,21 +278,49 @@ uint32_t Bar30_ReadADC(uint8_t conv_cmd, uint16_t delay_ms) {
 /*
  *  Read temperature (°C) and pressure (Pa)
  */
-void Bar30_ReadTempPressure(float *temperature, float *pressure) {
-    // 1. Read raw ADC values
-    uint32_t D1 = Bar30_ReadADC(0x48, 10); // Pressure OSR=4096
-    uint32_t D2 = Bar30_ReadADC(0x58, 10); // Temperature OSR=4096
+void Bar30_ReadTempPressure(float *temperature, float *pressure)
+{
+    // 1. Read raw ADC values (OSR=4096)
+    uint32_t D1 = Bar30_ReadADC(0x48, 10); // Pressure
+    uint32_t D2 = Bar30_ReadADC(0x58, 10); // Temperature
 
-    // 2. Compute calibrated values
-    int32_t dT = D2 - ((int32_t)C[5]<<8);
-    int32_t TEMP = 2000 + ((int64_t)dT * C[6])/8388608;
+    // 2. First-order compensation
+    int32_t dT = (int32_t)D2 - ((int32_t)C[5] << 8);
 
-    int64_t OFF = ((int64_t)C[2]<<17) + (((int64_t)C[4]*dT)>>6);
-    int64_t SENS = ((int64_t)C[1]<<16) + (((int64_t)C[3]*dT)>>7);
-    int32_t P = ((D1 * SENS / 2097152 - OFF)/8192);
+    int32_t TEMP = 2000 + ((int64_t)dT * C[6]) / 8388608;   // 0.01 °C
 
-    *temperature = TEMP / 100.0f; // °C
-    *pressure = P;      		  // Pa
+    int64_t OFF  = ((int64_t)C[2] << 17) + (((int64_t)C[4] * dT) >> 6);
+    int64_t SENS = ((int64_t)C[1] << 16) + (((int64_t)C[3] * dT) >> 7);
+
+    // 3. Second-order temperature compensation
+    int64_t T2 = 0;
+    int64_t OFF2 = 0;
+    int64_t SENS2 = 0;
+
+    if (TEMP < 2000)  // Below 20°C
+    {
+        T2    = (3LL * ((int64_t)dT * dT)) >> 33;
+        OFF2  = (3LL * (TEMP - 2000) * (TEMP - 2000)) >> 1;
+        SENS2 = (5LL * (TEMP - 2000) * (TEMP - 2000)) >> 3;
+
+        if (TEMP < -1500)  // Below -15°C
+        {
+            OFF2  += 7LL * (TEMP + 1500) * (TEMP + 1500);
+            SENS2 += 4LL * (TEMP + 1500) * (TEMP + 1500);
+        }
+    }
+
+    TEMP -= T2;
+    OFF  -= OFF2;
+    SENS -= SENS2;
+
+    // 4. Final pressure calculation
+    int32_t P = (int32_t)((((int64_t)D1 * SENS) >> 21) - OFF) >> 13;
+    // P is in 0.1 mbar
+
+    // 5. Convert to requested units
+    *temperature = TEMP / 100.0f;   // °C
+    *pressure    = P / 10000.0f;    // bar
 }
 
 /*
@@ -301,52 +329,25 @@ void Bar30_ReadTempPressure(float *temperature, float *pressure) {
 void Bar30_Task(void* argument)
 {
 	Bar30_Init();
+	for (uint8_t addr = 0; addr < 128; addr++)
+	{
+	    if (HAL_I2C_IsDeviceReady(&hi2c1, addr << 1, 1, 10) == HAL_OK)
+	    {
+	        printf("Found device at 0x%02X\r\n", addr);
+	    }
+	}
+	if (HAL_I2C_IsDeviceReady(&hi2c1, BAR30_ADDR, 5, 100) != HAL_OK) return;
 
 	float t0, p0, dt, dp, t, p = 0;
 	for (;;)
 	{
 		Bar30_ReadTempPressure(&t, &p);
-
-		// blink a number of times coresponding to temperature in celcius starting at 0
-		for (int i=0; (float)i<t; i++)
-		{
-			HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
-			osDelay(500);
-			HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
-			osDelay(500);
-		}
-
-//		// blink a number of times coresponding to pressure in kPa/1000 starting at 0
-//		for (int i=0; (float)i<p; i++)
-//		{
-//			HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
-//			osDelay(500);
-//			HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
-//			osDelay(500);
-//		}
-
-		osDelay(10000); // poll every 10s to allow for changes in p or t
 	}
 }
 
 /*
- *  Write to IMU (for initializing)
+ *  Write to IMU (for initializing settings)
  */
-void ACC_WriteReg(uint8_t reg, uint8_t data)
-{
-    uint8_t tx[2];
-    tx[0] = reg & 0x7F;   // write mode
-    tx[1] = data;
-
-    osMutexAcquire(spiMutex, osWaitForever);
-
-    ACC_CS_LOW();
-    HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
-    ACC_CS_HIGH();
-
-    osMutexRelease(spiMutex);
-}
-
 void GYRO_WriteReg(uint8_t reg, uint8_t data)
 {
     uint8_t tx[2];
@@ -363,27 +364,8 @@ void GYRO_WriteReg(uint8_t reg, uint8_t data)
 }
 
 /*
- *  for checking IMU online
+ *  for checking IMU online by reading a specific register only
  */
-uint8_t ACC_ReadReg(uint8_t reg)
-{
-    uint8_t tx[2];
-    uint8_t rx[2];
-
-    tx[0] = reg | 0x80;
-    tx[1] = 0x00;
-
-    osMutexAcquire(spiMutex, osWaitForever);
-
-    ACC_CS_LOW();
-    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
-    ACC_CS_HIGH();
-
-    osMutexRelease(spiMutex);
-
-    return rx[1];
-}
-
 uint8_t GYRO_ReadReg(uint8_t reg)
 {
     uint8_t tx[2];
@@ -404,27 +386,8 @@ uint8_t GYRO_ReadReg(uint8_t reg)
 }
 
 /*
- *  For retrieving either accelerometer or gyroscope
+ *  For retrieving raw gyroscope data
  */
-void ACC_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
-{
-    uint8_t tx[length + 1];
-    uint8_t rx[length + 1];
-
-    tx[0] = reg | 0xC0;   // read + auto increment
-    memset(&tx[1], 0, length);
-
-    osMutexAcquire(spiMutex, osWaitForever);
-
-    ACC_CS_LOW();
-    HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
-    ACC_CS_HIGH();
-
-    osMutexRelease(spiMutex);
-
-    memcpy(buffer, &rx[1], length);
-}
-
 void GYRO_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
 {
     uint8_t tx[length + 1];
@@ -445,32 +408,17 @@ void GYRO_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
 }
 
 /*
- *  Initialise SPI connection and check that Accelerometer is available
+ *  Initialise SPI connection and check that Gyroscope is available
  */
-bool ACC_Init()
-{
-	osDelay(1);
-	ACC_CS_LOW(); ACC_CS_HIGH(); // Put Accelerometer CS pin in SPI
-	osDelay(1);
-	ACC_ReadReg(0x00); // dummy read to activate SPI mode
-	osDelay(1);
-	ACC_WriteReg(0x7D, 4); // write to acc_pwr_ctrl for normal mode
-	osDelay(1);
-
-	int16_t who = ACC_ReadReg(0x00); // read actual chip ID
-	return (who == 0x1E);
-}
-
 bool GYRO_Init()
 {
-	osDelay(1);
 	GYRO_ReadReg(0x00); // Dummy read to activate SPI
-	osDelay(1);
+	osDelay(5);
 	if (GYRO_ReadReg(0x00) != 0x0F) return false; // device not found
 	osDelay(1);
-	GYRO_WriteReg(0x0F, 0x00); // Set gyro range to ±2000 dps
+	GYRO_WriteReg(0x0F, 0x02); // Set gyro range to ±500 dps
 	osDelay(1);
-	GYRO_WriteReg(0x10, 0x04); 	// Set bandwidth + ODR (e.g. 100Hz)
+	GYRO_WriteReg(0x10, 0x05); 	// Set bandwidth 100Hz
 	osDelay(1);
     return true;
 }
@@ -487,10 +435,9 @@ void ACC_Task(void *argument)
 	float gx, gy, gz;
 
 	// constants to convert to gs and dps
-	float convacc = 0.000061f;
-	float convgyro = 0.00875f;
+	float convacc = 24.0f / 32768.0f;
+	float convgyro = 500.0f / 32768.0f;
 
-	ACC_Init();
 	if (!GYRO_Init()) return;
 
 	for (;;)
@@ -504,6 +451,8 @@ void ACC_Task(void *argument)
 		gx = raw_gx * convgyro;
 		gy = raw_gy * convgyro;
 		gz = raw_gz * convgyro;
+
+		osDelay(10); // 10ms delay = 100Hz
 	}
 }
 
@@ -514,8 +463,6 @@ void ACC_Task(void *argument)
   */
 int main(void)
 {
-	spiMutex = osMutexNew(NULL);
-
 	// populate a global lookup table for sin and cos ahead of time for performance
 	for (int i=0; i<SERVO_STEP_SIZE; i++)
 	{
@@ -546,9 +493,12 @@ int main(void)
 	/* Init scheduler */
 	osKernelInitialize();
 
+	/* Enforce only one device to communicate over SPI line at a time */
+	spiMutex = osMutexNew(NULL);
+
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
-	accTaskHandle = osThreadNew(ACC_Task, NULL, &accTask_attributes);
+//	accTaskHandle = osThreadNew(ACC_Task, NULL, &accTask_attributes);
 //	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
 //	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
 //	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
@@ -655,8 +605,6 @@ static void MX_SPI1_Init(void)
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-//  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
-//  hspi1.Init.CLKPhase    = SPI_PHASE_2EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
