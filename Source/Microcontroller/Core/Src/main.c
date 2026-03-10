@@ -25,11 +25,14 @@
 
 #define INITPAUSE 7000 // 7.0 s
 #define BAR30_ADDR 0x76<<1
+//constexpr int BAR30_ADDR = 0x76<<1;
+//constexpr HUM_ADDR = 0x70<<1;
+//constexpr EPROM_ADDR = 0x50<<1;
 
 /* Define a queue length and element size */
 #define SERVO_QUEUE_LENGTH 10
 #define SERVO_QUEUE_ITEM_SIZE 3*sizeof(uint32_t)
-#define SERVO_STEP_SIZE 2880
+#define SERVO_STEP_SIZE (0x01<<13)
 
 // definitions for SPI high and low pulling
 #define CS_PORT GPIOC
@@ -37,19 +40,11 @@
 #define GYRO_CS_PIN SPI1_CS2_Pin
 #define MAG_CS_PIN SPI1_CS3_Pin
 
-void ACC_CS_LOW() {
-    HAL_GPIO_WritePin(CS_PORT, ACC_CS_PIN, GPIO_PIN_RESET);
-}
-
-void ACC_CS_HIGH() {
-    HAL_GPIO_WritePin(CS_PORT, ACC_CS_PIN, GPIO_PIN_SET);
-}
-
-void GYRO_CS_LOW() {
+void IMU_CS_LOW() {
 	HAL_GPIO_WritePin(CS_PORT, GYRO_CS_PIN, GPIO_PIN_RESET);
 }
 
-void GYRO_CS_HIGH() {
+void IMU_CS_HIGH() {
 	HAL_GPIO_WritePin(CS_PORT, GYRO_CS_PIN, GPIO_PIN_SET);
 }
 
@@ -87,7 +82,8 @@ TIM_HandleTypeDef htim12;
 UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart5;
 
-QueueHandle_t servoQueue;
+QueueHandle_t servoQueue[8];
+
 osMutexId_t spiMutex;
 
 /* Definitions for task space and handles */
@@ -364,25 +360,25 @@ void Bar30_Task(void* argument)
 /*
  *  Write to IMU (for initializing settings)
  */
-void GYRO_WriteReg(uint8_t reg, uint8_t data)
+void IMU_WriteReg(uint8_t reg, uint8_t data)
 {
     uint8_t tx[2];
     tx[0] = reg & 0x7F;   // write mode
     tx[1] = data;
 
     osMutexAcquire(spiMutex, osWaitForever);
-    GYRO_CS_LOW();
+    IMU_CS_LOW();
 
     HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
 
-    GYRO_CS_HIGH();
+    IMU_CS_HIGH();
     osMutexRelease(spiMutex);
 }
 
 /*
  *  for checking IMU online by reading a specific register only
  */
-uint8_t GYRO_ReadReg(uint8_t reg)
+uint8_t IMU_ReadReg(uint8_t reg)
 {
     uint8_t tx[2];
     uint8_t rx[2];
@@ -391,11 +387,11 @@ uint8_t GYRO_ReadReg(uint8_t reg)
     tx[1] = 0x00;
 
     osMutexAcquire(spiMutex, osWaitForever);
-    GYRO_CS_LOW();
+    IMU_CS_LOW();
 
     HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
 
-    GYRO_CS_HIGH();
+    IMU_CS_HIGH();
     osMutexRelease(spiMutex);
 
     return rx[1];
@@ -404,7 +400,7 @@ uint8_t GYRO_ReadReg(uint8_t reg)
 /*
  *  For retrieving raw gyroscope data
  */
-void GYRO_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
+void IMU_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
 {
     uint8_t tx[length + 1];
     uint8_t rx[length + 1];
@@ -413,28 +409,24 @@ void GYRO_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
     memset(&tx[1], 0, length);
 
     osMutexAcquire(spiMutex, osWaitForever);
-    GYRO_CS_LOW();
+    IMU_CS_LOW();
 
     HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
 
-    GYRO_CS_HIGH();
+    IMU_CS_HIGH();
     osMutexRelease(spiMutex);
 
     memcpy(buffer, &rx[1], length);
 }
 
 /*
- *  Initialise SPI connection and check that Gyroscope is available
+ *  Initialise SPI connection and check that IMU is available
  */
-bool GYRO_Init()
+bool IMU_Init()
 {
-	GYRO_ReadReg(0x00); // Dummy read to activate SPI
+	IMU_ReadReg(0x00); // Dummy read to activate SPI
 	osDelay(5);
-	if (GYRO_ReadReg(0x00) != 0x0F) return false; // device not found
-	osDelay(1);
-	GYRO_WriteReg(0x0F, 0x02); // Set gyro range to ±500 dps
-	osDelay(1);
-	GYRO_WriteReg(0x10, 0x05); 	// Set bandwidth 100Hz
+	if (IMU_ReadReg(0x00) != 0x0F) return false; // device not found
 	osDelay(1);
     return true;
 }
@@ -451,12 +443,12 @@ void IMU_Task(void *argument)
 	// constants to convert to dps
 	float convgyro = 500.0f / 32768.0f;
 
-	if (!GYRO_Init()) return;
+	if (!IMU_Init()) return;
 
 	for (;;)
 	{
 		// gyroscope data
-		GYRO_Read(0x02, buffer, 6);
+		IMU_Read(0x02, buffer, 6);
 		raw_gx = (int16_t)(buffer[1] << 8 | buffer[0]);
 		raw_gy = (int16_t)(buffer[3] << 8 | buffer[2]);
 		raw_gz = (int16_t)(buffer[5] << 8 | buffer[4]);
@@ -542,9 +534,7 @@ void Mag_Task(void *argument)
 	uint8_t buffer[7];
 	uint32_t raw_x, raw_y, raw_z;
 	int32_t x,y,z;
-	float x_gauss = x / 16384.0f;
-	float y_gauss = y / 16384.0f;
-	float z_gauss = z / 16384.0f;
+	float x_gauss, y_gauss, z_gauss;
 	float heading;
 
 	if (!Init_Mag()) return;
@@ -576,15 +566,14 @@ void Mag_Task(void *argument)
 		y = raw_y - 131072;
 		z = raw_z - 131072;
 
-		// convert to gaussian units
+		// convert to Gaussian units
 		x_gauss = x / 16384.0f;
 		y_gauss = y / 16384.0f;
 		z_gauss = z / 16384.0f;
 
-		// convert to a heading with 0 degrees north
+		// convert to a heading with 0 currently east
 		float heading = atan2f(y, x) * (180.0f / M_PI);
-		if (heading < 0)
-			heading += 360;
+		if (heading < 0) heading += 360;
 
 		osDelay(9); // reading at 100 Hz so need to read every 9 ms and give 1 ms time to communicate (10 ms total)
 	}
