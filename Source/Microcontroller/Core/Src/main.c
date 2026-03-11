@@ -29,10 +29,54 @@
 //constexpr HUM_ADDR = 0x70<<1;
 //constexpr EPROM_ADDR = 0x50<<1;
 
-/* Define a queue length and element size */
-#define SERVO_QUEUE_LENGTH 10
-#define SERVO_QUEUE_ITEM_SIZE 3*sizeof(uint32_t)
-#define SERVO_STEP_SIZE (0x01<<13)
+typedef struct
+{
+	float amplitude;
+	uint16_t speed;
+	int16_t offset;
+} ServoCmd_t;
+
+typedef struct
+{
+	int8_t thrust;
+} ThrusterCmd_t;
+
+typedef struct
+{
+	float acc_x;
+	float acc_y;
+	float acc_z;
+	float gyro_x;
+	float gyro_y;
+	float gyro_z;
+}IMUCom_t;
+
+typedef struct
+{
+	float head_x;
+	float head_y;
+	float head_z;
+}MagCom_t;
+
+typedef struct
+{
+	float pressure;
+	float water_temp;
+}Bar30Com_t;
+
+typedef struct
+{
+	float humidity;
+	float air_temp;
+}HumidCom_t;
+
+typedef struct
+{
+	float board_temp;
+}BoardCom_t;
+
+#define SERVO_QUEUE_ITEM_SIZE sizeof(ServoCmd_t)
+#define SERVO_STEP_SIZE (0x01<<14)
 
 // definitions for SPI high and low pulling
 #define CS_PORT GPIOC
@@ -82,7 +126,13 @@ TIM_HandleTypeDef htim12;
 UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart5;
 
-QueueHandle_t servoQueue[8];
+QueueHandle_t ServoQueue[8];
+QueueHandle_t ThrusterQueue;
+QueueHandle_t IMUQueue;
+QueueHandle_t MagQueue;
+QueueHandle_t Bar30Queue;
+QueueHandle_t HumidQueue;
+QueueHandle_t BoardQueue;
 
 osMutexId_t spiMutex;
 
@@ -142,7 +192,6 @@ static void MX_SPI2_Init(void);
 static void MX_UART5_Init(void);
 
 static float sin_t[SERVO_STEP_SIZE];
-static float cos_t[SERVO_STEP_SIZE];
 
 /*
  *  Convert angle in degrees to a pulse width between 900-2100 µs
@@ -188,6 +237,9 @@ void LED_Task(void* argument)
 	}
 }
 
+/*
+ *  set to 0 position and wait while other systems initialize
+ */
 void Servo_Init(TIM_HandleTypeDef* tim, uint32_t channel)
 {
 	__HAL_TIM_SET_COMPARE(tim, channel, 1500);
@@ -210,7 +262,7 @@ void Servo_Task(void *argument)
 	for (;;)
 	{
 		index = (index + step) % SERVO_STEP_SIZE;
-		__HAL_TIM_SET_COMPARE(params->tim, params->channel, angle_to_pulse(lroundf(sin_t[index])));
+		__HAL_TIM_SET_COMPARE(params->tim, params->channel, angle_to_pulse(lroundf(80*sin_t[index])));
 		osDelay(1);
 	}
 }
@@ -256,7 +308,7 @@ void Bar30_Init(void) {
     // 1. Reset sensor
     cmd = 0x1E;
     HAL_I2C_Master_Transmit(&hi2c1, BAR30_ADDR, &cmd, 1, 100);
-    HAL_Delay(10);
+    osDelay(10);
 
     // 2. Read PROM calibration C1..C6
     for(uint8_t i=0; i<6; i++) {
@@ -268,6 +320,8 @@ void Bar30_Init(void) {
 
         C[i+1] = (buf[0]<<8) | buf[1];
     }
+
+    osDelay(INITPAUSE);
 }
 
 /*
@@ -427,7 +481,7 @@ bool IMU_Init()
 	IMU_ReadReg(0x00); // Dummy read to activate SPI
 	osDelay(5);
 	if (IMU_ReadReg(0x00) != 0x0F) return false; // device not found
-	osDelay(1);
+	osDelay(INITPAUSE);
     return true;
 }
 
@@ -461,6 +515,9 @@ void IMU_Task(void *argument)
 	}
 }
 
+/*
+ *  SPI write function to Magnetometer
+ */
 void Mag_Write(uint8_t reg, uint8_t data)
 {
 	uint8_t tx[2];
@@ -476,6 +533,9 @@ void Mag_Write(uint8_t reg, uint8_t data)
 	osMutexRelease(spiMutex);
 }
 
+/*
+ *  SPI register read function from Magnetometer
+ */
 uint8_t Mag_ReadReg(uint8_t reg)
 {
 	uint8_t tx[2];
@@ -495,6 +555,9 @@ uint8_t Mag_ReadReg(uint8_t reg)
 	return rx[1];
 }
 
+/*
+ *  SPI burst read function from Magnetometer
+ */
 void Mag_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
 {
     uint8_t tx[length + 1];
@@ -514,15 +577,16 @@ void Mag_Read(uint8_t reg, uint8_t *buffer, uint8_t length)
     memcpy(buffer, &rx[1], length);
 }
 
+/*
+ *  Initialize Magnetometer and pause for initialization sequence
+ */
 bool Init_Mag()
 {
 	Mag_Write(0x09, 0x10); // set magnetometer
 	osDelay(1);
 	Mag_Write(0x09, 0x20); // set automatic set/reset
-	osDelay(1);
+	osDelay(INITPAUSE);
 
-//	Mag_Write(0x0A, 0x00); // set bandwidth to 100 Hz
-//	Mag_Write(0x0B, 0x0F); // set reading to 100 Hz
 	return (Mag_ReadReg(0x2F) == 0x30); // return device ID to check online
 }
 
@@ -591,8 +655,7 @@ int main(void)
 	// populate a global lookup table for sin and cos ahead of time for performance
 	for (int i=0; i<SERVO_STEP_SIZE; i++)
 	{
-		sin_t[i] = 80 * sin((2*M_PI*i)/SERVO_STEP_SIZE);
-		cos_t[i] = 80 * cos((2*M_PI*i)/SERVO_STEP_SIZE);
+		sin_t[i] = sin((2*M_PI*i)/SERVO_STEP_SIZE);
 	}
 
 	tims[0] = &htim2;
@@ -626,12 +689,23 @@ int main(void)
 	/* Enforce only one device to communicate over SPI line at a time */
 	spiMutex = osMutexNew(NULL);
 
+	/* Queue creation */
+	for(int i = 0; i < 8; i++)
+	{
+	    ServoQueue[i] = xQueueCreate(10, sizeof(ServoCmd_t));
+	}
+
+	ThrusterQueue = xQueueCreate(10, sizeof(ThrusterCmd_t));
+	IMUQueue = xQueueCreate(10, sizeof(IMUCom_t));
+	MagQueue = xQueueCreate(10, sizeof(MagCom_t));
+	Bar30Queue = xQueueCreate(10, sizeof(Bar30Com_t));
+
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
 //	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
-//	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
+	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
 //	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
-	magTaskHandle = osThreadNew(Mag_Task, NULL, &magTask_attributes);
+//	magTaskHandle = osThreadNew(Mag_Task, NULL, &magTask_attributes);
 
 	/* start separate tasks for all 8 servos across both timers and each of their 4 channels */
 //	for (int i=0; i<2; i++)
