@@ -29,6 +29,9 @@
 //constexpr HUM_ADDR = 0x70<<1;
 //constexpr EPROM_ADDR = 0x50<<1;
 
+/*
+ *  Struct defenitions for communication commands from the Raspberry Pi
+ */
 typedef struct
 {
 	float amplitude;
@@ -41,6 +44,9 @@ typedef struct
 	int8_t thrust;
 } ThrusterCmd_t;
 
+/*
+ *  Struct defenitions for communicating data to the Raspberry Pi
+ */
 typedef struct
 {
 	float acc_x;
@@ -74,6 +80,27 @@ typedef struct
 {
 	float board_temp;
 }BoardCom_t;
+
+/*
+ *  Struct defenition for assembling communication packet out to the Raspberry Pi
+ */
+typedef struct
+{
+	IMUCom_t IMUCom;
+	MagCom_t MagCom;
+	Bar30Com_t Bar30Com;
+	HumidCom_t HumidCom;
+	BoardCom_t BoardCom;
+} OutPacket;
+
+/*
+ *  Struct defenitions for interpreting communication packets from the Raspberry Pi
+ */
+typedef struct
+{
+	ServoCmd_t ServoCmd[8];
+	ThrusterCmd_t ThrusterCmd;
+} InPacket;
 
 #define SERVO_QUEUE_ITEM_SIZE sizeof(ServoCmd_t)
 #define SERVO_STEP_SIZE (0x01<<14)
@@ -244,7 +271,6 @@ void Servo_Init(TIM_HandleTypeDef* tim, uint32_t channel)
 {
 	__HAL_TIM_SET_COMPARE(tim, channel, 1500);
 	HAL_TIM_PWM_Start(tim, channel);
-	osDelay(INITPAUSE);
 }
 
 /*
@@ -258,6 +284,7 @@ void Servo_Task(void *argument)
 	int16_t step = 1;
 
 	Servo_Init(params->tim, params->channel);
+	osDelay(INITPAUSE);
 
 	for (;;)
 	{
@@ -275,7 +302,6 @@ void Thruster_Init()
 {
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 1500);
 	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-	osDelay(INITPAUSE);
 }
 
 /*
@@ -286,7 +312,9 @@ void Thruster_Task(void *argument)
 {
 	int16_t step = 0;
 	int16_t stride = 1;
+
 	Thruster_Init();
+	osDelay(INITPAUSE);
 
 	for (;;)
 	{
@@ -320,8 +348,6 @@ void Bar30_Init(void) {
 
         C[i+1] = (buf[0]<<8) | buf[1];
     }
-
-    osDelay(INITPAUSE);
 }
 
 /*
@@ -395,6 +421,8 @@ void Bar30_ReadTempPressure(float *temperature, float *pressure)
 void Bar30_Task(void* argument)
 {
 	Bar30_Init();
+	osDelay(INITPAUSE);
+
 	for (uint8_t addr = 0; addr < 128; addr++)
 	{
 	    if (HAL_I2C_IsDeviceReady(&hi2c1, addr << 1, 1, 10) == HAL_OK)
@@ -481,7 +509,6 @@ bool IMU_Init()
 	IMU_ReadReg(0x00); // Dummy read to activate SPI
 	osDelay(5);
 	if (IMU_ReadReg(0x00) != 0x0F) return false; // device not found
-	osDelay(INITPAUSE);
     return true;
 }
 
@@ -498,6 +525,7 @@ void IMU_Task(void *argument)
 	float convgyro = 500.0f / 32768.0f;
 
 	if (!IMU_Init()) return;
+	osDelay(INITPAUSE);
 
 	for (;;)
 	{
@@ -585,8 +613,6 @@ bool Init_Mag()
 	Mag_Write(0x09, 0x10); // set magnetometer
 	osDelay(1);
 	Mag_Write(0x09, 0x20); // set automatic set/reset
-	osDelay(INITPAUSE);
-
 	return (Mag_ReadReg(0x2F) == 0x30); // return device ID to check online
 }
 
@@ -602,6 +628,7 @@ void Mag_Task(void *argument)
 	float heading;
 
 	if (!Init_Mag()) return;
+	osDelay(INITPAUSE);
 
 	for (;;)
 	{
@@ -690,24 +717,18 @@ int main(void)
 	spiMutex = osMutexNew(NULL);
 
 	/* Queue creation */
-	for(int i = 0; i < 8; i++)
-	{
-	    ServoQueue[i] = xQueueCreate(10, sizeof(ServoCmd_t));
-	}
-
-	ThrusterQueue = xQueueCreate(10, sizeof(ThrusterCmd_t));
 	IMUQueue = xQueueCreate(10, sizeof(IMUCom_t));
 	MagQueue = xQueueCreate(10, sizeof(MagCom_t));
 	Bar30Queue = xQueueCreate(10, sizeof(Bar30Com_t));
+	ThrusterQueue = xQueueCreate(10, sizeof(ThrusterCmd_t));
+	for(int i = 0; i < 8; i++) { ServoQueue[i] = xQueueCreate(10, sizeof(ServoCmd_t)); }
 
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
-//	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
-	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
 //	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
 //	magTaskHandle = osThreadNew(Mag_Task, NULL, &magTask_attributes);
-
-	/* start separate tasks for all 8 servos across both timers and each of their 4 channels */
+	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
+//	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
 //	for (int i=0; i<2; i++)
 //	{
 //		for (int k=0; k<4; k++)
