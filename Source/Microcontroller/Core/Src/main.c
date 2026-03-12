@@ -1,19 +1,10 @@
-/**
+/*
   ******************************************************************************
   * @file           : main.c
   * @brief          : Main program body
   ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
   */
+
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "freertos.h"
@@ -24,19 +15,21 @@
 #include <stdbool.h>
 
 #define INITPAUSE 7000 // 7.0 s
+#define PACKETSIZE 128
 #define BAR30_ADDR 0x76<<1
 //constexpr int BAR30_ADDR = 0x76<<1;
 //constexpr HUM_ADDR = 0x70<<1;
 //constexpr EPROM_ADDR = 0x50<<1;
 
 /*
- *  Struct defenitions for communication commands from the Raspberry Pi
+ *  Struct defenitions for communicating commands from the Raspberry Pi to the tasks
  */
 typedef struct
 {
 	float amplitude;
 	uint16_t speed;
-	int16_t offset;
+	int16_t horz_offset;
+	int16_t vert_offset;
 } ServoCmd_t;
 
 typedef struct
@@ -45,7 +38,7 @@ typedef struct
 } ThrusterCmd_t;
 
 /*
- *  Struct defenitions for communicating data to the Raspberry Pi
+ *  Struct defenitions for communicating task data to the Raspberry Pi communication task
  */
 typedef struct
 {
@@ -91,7 +84,7 @@ typedef struct
 	Bar30Com_t Bar30Com;
 	HumidCom_t HumidCom;
 	BoardCom_t BoardCom;
-} OutPacket;
+} OutPacket_t;
 
 /*
  *  Struct defenitions for interpreting communication packets from the Raspberry Pi
@@ -100,7 +93,7 @@ typedef struct
 {
 	ServoCmd_t ServoCmd[8];
 	ThrusterCmd_t ThrusterCmd;
-} InPacket;
+} InPacket_t;
 
 #define SERVO_QUEUE_ITEM_SIZE sizeof(ServoCmd_t)
 #define SERVO_STEP_SIZE (0x01<<14)
@@ -130,9 +123,28 @@ void MAG_CS_HIGH() {
 // Bar30 Calibration coefficients
 uint16_t C[7];
 
+/* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+SPI_HandleTypeDef hspi1;
+SPI_HandleTypeDef hspi2;
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim12;
+UART_HandleTypeDef huart4;
+UART_HandleTypeDef huart5;
+
+/* Definition of handles for all the communication queues */
+QueueHandle_t IMUQueue;
+QueueHandle_t MagQueue;
+QueueHandle_t Bar30Queue;
+QueueHandle_t HumidQueue;
+QueueHandle_t BoardQueue;
+QueueHandle_t ThrusterQueue;
+QueueHandle_t ServoQueue[8];
+
+/* Helper struct for communicating to servos which channel and tim they are for initialization and ID */
 TIM_HandleTypeDef* tims[2];
 uint32_t channels[4] = {TIM_CHANNEL_1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_4};
-
 typedef struct
 {
     TIM_HandleTypeDef *tim;
@@ -140,54 +152,13 @@ typedef struct
 } ServoParams_t;
 ServoParams_t servoParams[2][4];
 
-/* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
-
-SPI_HandleTypeDef hspi1;
-SPI_HandleTypeDef hspi2;
-
-TIM_HandleTypeDef htim2;
-TIM_HandleTypeDef htim3;
-TIM_HandleTypeDef htim12;
-
-UART_HandleTypeDef huart4;
-UART_HandleTypeDef huart5;
-
-QueueHandle_t ServoQueue[8];
-QueueHandle_t ThrusterQueue;
-QueueHandle_t IMUQueue;
-QueueHandle_t MagQueue;
-QueueHandle_t Bar30Queue;
-QueueHandle_t HumidQueue;
-QueueHandle_t BoardQueue;
-
+/* Mutex lock for making sure that SPI1 communication doesn't collide */
 osMutexId_t spiMutex;
 
 /* Definitions for task space and handles */
 osThreadId_t ledTaskHandle;
 const osThreadAttr_t ledTask_attributes = {
 	.name = "LED_Task",
-	.stack_size = 128 * 4,  // stack in bytes
-	.priority = (osPriority_t) osPriorityNormal,
-};
-
-osThreadId_t servoTaskHandle[8];
-const osThreadAttr_t servoTask_attributes = {
-	.name = "Servo_Task",
-	.stack_size = 128 * 4,  // stack in bytes
-	.priority = (osPriority_t) osPriorityNormal,
-};
-
-osThreadId_t thrusterTaskHandle;
-const osThreadAttr_t thrusterTask_attributes = {
-	.name = "Thruster_Task",
-	.stack_size = 128 * 4,  // stack in bytes
-	.priority = (osPriority_t) osPriorityNormal,
-};
-
-osThreadId_t bar30TaskHandle;
-const osThreadAttr_t bar30Task_attributes = {
-	.name = "Bar30_Task",
 	.stack_size = 128 * 4,  // stack in bytes
 	.priority = (osPriority_t) osPriorityNormal,
 };
@@ -206,6 +177,41 @@ const osThreadAttr_t magTask_attributes = {
 	.priority = (osPriority_t) osPriorityNormal,
 };
 
+osThreadId_t bar30TaskHandle;
+const osThreadAttr_t bar30Task_attributes = {
+	.name = "Bar30_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t humidTaskHandle;
+const osThreadAttr_t humidTask_attributes = {
+	.name = "Humid_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t boardTaskHandle;
+const osThreadAttr_t boardTask_attributes = {
+	.name = "Board_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t thrusterTaskHandle;
+const osThreadAttr_t thrusterTask_attributes = {
+	.name = "Thruster_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t servoTaskHandle[8];
+const osThreadAttr_t servoTask_attributes = {
+	.name = "Servo_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
@@ -218,7 +224,20 @@ static void MX_TIM12_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_UART5_Init(void);
 
+/* global array that stores pre-calculated sin wave for performance */
 static float sin_t[SERVO_STEP_SIZE];
+
+/*
+ *  Test Task for checking flashing and power
+ */
+void LED_Task(void* argument)
+{
+	for (;;)
+	{
+		HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
+		osDelay(500);
+	}
+}
 
 /*
  *  Convert angle in degrees to a pulse width between 900-2100 µs
@@ -237,34 +256,6 @@ uint16_t angle_to_pulse(int16_t angle)
 }
 
 /*
- * Convert percentage between -100 to 100 into a pulse width between 1000 µs to 2000 µs
- * 		-100 is reverse thrust while 100 is forward thrust
- */
-uint16_t percent_to_pulse(int16_t percent)
-{
-	// clamp to bounds
-	if (percent > 100) percent = 100;
-	if (percent < -100) percent = -100;
-
-	// translate to range of 0 to 200 for pulse width math
-	percent += 100;
-
-	return 1000 + ((uint32_t)percent * 1000) / 200;
-}
-
-/*
- *  Test Task for checking correct flashing
- */
-void LED_Task(void* argument)
-{
-	for (;;)
-	{
-		HAL_GPIO_TogglePin(LED_Output_GPIO_Port, LED_Output_Pin);
-		osDelay(500);
-	}
-}
-
-/*
  *  set to 0 position and wait while other systems initialize
  */
 void Servo_Init(TIM_HandleTypeDef* tim, uint32_t channel)
@@ -280,18 +271,60 @@ void Servo_Init(TIM_HandleTypeDef* tim, uint32_t channel)
 void Servo_Task(void *argument)
 {
 	ServoParams_t* params = (ServoParams_t*)argument;
+	ServoCmd_t input;
+	float range;
+	float angle;
 	int16_t index = 0;
-	int16_t step = 1;
+	int16_t horz_offset = 0;
+	int16_t vert_offset = 0;
+	int16_t step = 0;
+	int8_t servo_index = 0;
 
+	// figure out servo index from params
+	if (params->tim == &htim2) servo_index = 0;
+	else servo_index = 4;
+
+	if (params->channel == TIM_CHANNEL_1) servo_index += 0;
+	else if (params->channel == TIM_CHANNEL_2) servo_index += 1;
+	else if (params->channel == TIM_CHANNEL_3) servo_index += 2;
+	else servo_index += 3;
+
+	// PWM provides no feedback from the thruster so no error state
 	Servo_Init(params->tim, params->channel);
 	osDelay(INITPAUSE);
 
 	for (;;)
 	{
+		if (xQueueReceive(ServoQueue[servo_index], &input, 0) == pdPASS) // don't wait for commands, just check if there are any news
+		{
+			range = input.amplitude;
+			step = input.speed;
+			horz_offset = input.horz_offset;
+			vert_offset = input.vert_offset;
+		}
+
 		index = (index + step) % SERVO_STEP_SIZE;
-		__HAL_TIM_SET_COMPARE(params->tim, params->channel, angle_to_pulse(lroundf(80*sin_t[index])));
+		angle = range * sin_t[index + horz_offset] + vert_offset;
+		__HAL_TIM_SET_COMPARE(params->tim, params->channel, angle_to_pulse(lroundf(angle)));
+
 		osDelay(1);
 	}
+}
+
+/*
+ * Convert percentage between -100 to 100 into a pulse width between 1000 µs to 2000 µs
+ * 		-100 is reverse thrust while 100 is forward thrust
+ */
+uint16_t percent_to_pulse(int8_t percent)
+{
+	// clamp to bounds
+	if (percent > 100) percent = 100;
+	if (percent < -100) percent = -100;
+
+	// translate to range of 0 to 200 for pulse width math
+	percent += 100;
+
+	return 1000 + ((uint32_t)percent * 1000) / 200;
 }
 
 /*
@@ -310,18 +343,21 @@ void Thruster_Init()
  */
 void Thruster_Task(void *argument)
 {
-	int16_t step = 0;
-	int16_t stride = 1;
+	ThrusterCmd_t input;
+	int8_t thrust = 0;
 
-	Thruster_Init();
+	Thruster_Init(); // PWM provides no feedback from the thruster so no error state
 	osDelay(INITPAUSE);
 
 	for (;;)
 	{
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, percent_to_pulse(step));
-		step += stride;
-		if (step >= 100) stride*=-1;
-		if (step <= -100) stride*=-1;
+		if (xQueueReceive(ThrusterQueue, &input, 0) == pdPASS) // don't wait for commands, just check if there are any news
+		{
+			thrust = input.thrust;
+		}
+
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, percent_to_pulse(thrust));
+
 		osDelay(5);
 	}
 }
@@ -623,9 +659,8 @@ void Mag_Task(void *argument)
 {
 	uint8_t buffer[7];
 	uint32_t raw_x, raw_y, raw_z;
-	int32_t x,y,z;
-	float x_gauss, y_gauss, z_gauss;
-	float heading;
+	float x,y,z;
+	MagCom_t output;
 
 	if (!Init_Mag()) return;
 	osDelay(INITPAUSE);
@@ -652,24 +687,82 @@ void Mag_Task(void *argument)
 		    ((uint32_t)buffer[5] << 2)  |
 		    ((buffer[6] >> 6) & 0x03);
 
-		// convert to signed by subtracting mid-point
-		x = raw_x - 131072;
-		y = raw_y - 131072;
-		z = raw_z - 131072;
+		// convert to signed gaussian units
+		x = (raw_x - 131072) / 16384.0f;
+		y = (raw_y - 131072) / 16384.0f;
+		z = (raw_z - 131072) / 16384.0f;
 
-		// convert to Gaussian units
-		x_gauss = x / 16384.0f;
-		y_gauss = y / 16384.0f;
-		z_gauss = z / 16384.0f;
+		output.head_x = x;
+		output.head_y = y;
+		output.head_z = z;
 
-		// convert to a heading with 0 currently east
-		float heading = atan2f(y, x) * (180.0f / M_PI);
-		if (heading < 0) heading += 360;
+		xQueueSend(MagQueue, &output, HAL_MAX_DELAY); // wait until there is space, overflow indicates gathering data faster than we can save
 
 		osDelay(9); // reading at 100 Hz so need to read every 9 ms and give 1 ms time to communicate (10 ms total)
 	}
 
 	return;
+}
+
+void Humid_Task(void *argument)
+{
+	return;
+}
+
+void Board_Task(void * argument)
+{
+	return;
+}
+
+/*
+ *  Handles communication back and forth to and from the raspberry pi by assembling and deciphering packets
+ */
+void PiCom_Task(void * argument)
+{
+	uint8_t tx[PACKETSIZE];
+	uint8_t rx[PACKETSIZE];
+	OutPacket_t out;
+	InPacket_t in;
+	ThrusterCmd_t thrusterCommand;
+	ServoCmd_t servoCommand[8];
+
+	// TODO: Establish check communications with Raspberry Pi
+	// TODO: Check which sensors are online for queue receiving
+	// TODO: Report to Raspberry Pi which sensors are offline
+
+	for (;;)
+	{
+		/* clean all communications structures to avoid sending old data */
+		memset(tx, 0, PACKETSIZE);
+		memset(rx, 0, PACKETSIZE);
+		memset(&out, 0, sizeof(OutPacket_t));
+		memset(&in, 0, sizeof(InPacket_t));
+		memset(&thrusterCommand, 0, sizeof(ThrusterCmd_t));
+		for (int i=0; i<8; i++) memset(&servoCommand[i], 0, sizeof(ServoCmd_t));
+
+		/* collect new data from all sensor queues into the outgoing packet */
+		// TODO: Adjust queue timeouts in case of queues underflowing
+		xQueueReceive(IMUQueue, &out.IMUCom, 1);
+		xQueueReceive(MagQueue, &out.MagCom, 1);
+		xQueueReceive(Bar30Queue, &out.Bar30Com, 1);
+		xQueueReceive(HumidQueue, &out.HumidCom, 1);
+		xQueueReceive(BoardQueue, &out.BoardCom, 1);
+
+		/* serialize packet struct into bytes */
+		memcpy(tx, &out, sizeof(OutPacket_t));
+
+		/* perform transfer (using NSS so no need to manually pull any chips low or high) */
+		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, HAL_MAX_DELAY);
+
+		/* de-serialize byte packet into struct */
+		memcpy(rx, &in, sizeof(InPacket_t));
+
+		/* distribute commands */
+		// TODO: Adjust queue timeouts in case of queue overflowing
+		// TODO: Avoid sending duplicate commands
+		xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
+		for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &in.ServoCmd[i], 1);
+	}
 }
 
 
@@ -725,19 +818,21 @@ int main(void)
 
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
-//	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
-//	magTaskHandle = osThreadNew(Mag_Task, NULL, &magTask_attributes);
+	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
+	magTaskHandle = osThreadNew(Mag_Task, NULL, &magTask_attributes);
 	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
-//	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
-//	for (int i=0; i<2; i++)
-//	{
-//		for (int k=0; k<4; k++)
-//		{
-//			servoParams[i][k].tim = tims[i];
-//			servoParams[i][k].channel = channels[k];
-//			servoTaskHandle[(i*4)+k] = osThreadNew(Servo_Task, &servoParams[i][k], &servoTask_attributes);
-//		}
-//	}
+	humidTaskHandle = osThreadNew(Humid_Task, NULL, &humidTask_attributes);
+	boardTaskHandle = osThreadNew(Board_Task, NULL, &boardTask_attributes);
+	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
+	for (int i=0; i<2; i++)
+	{
+		for (int k=0; k<4; k++)
+		{
+			servoParams[i][k].tim = tims[i];
+			servoParams[i][k].channel = channels[k];
+			servoTaskHandle[(i*4)+k] = osThreadNew(Servo_Task, &servoParams[i][k], &servoTask_attributes);
+		}
+	}
 
 	/* Start scheduler */
 	osKernelStart();
