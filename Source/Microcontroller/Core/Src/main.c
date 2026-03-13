@@ -553,9 +553,10 @@ bool IMU_Init()
  */
 void IMU_Task(void *argument)
 {
+	IMUCom_t output;
 	uint8_t buffer[6];
 	int16_t raw_gx, raw_gy, raw_gz;
-	float gx, gy, gz;
+	int16_t raw_ax, raw_ay, raw_az;
 
 	// constants to convert to dps
 	float convgyro = 500.0f / 32768.0f;
@@ -571,11 +572,11 @@ void IMU_Task(void *argument)
 		raw_gy = (int16_t)(buffer[3] << 8 | buffer[2]);
 		raw_gz = (int16_t)(buffer[5] << 8 | buffer[4]);
 
-		gx = raw_gx * convgyro;
-		gy = raw_gy * convgyro;
-		gz = raw_gz * convgyro;
+		output.gyro_x = raw_gx * convgyro;
+		output.gyro_y = raw_gy * convgyro;
+		output.gyro_z = raw_gz * convgyro;
 
-		osDelay(10); // 10ms delay = 100Hz
+		xQueueSend(IMUQueue, &output, HAL_MAX_DELAY); // wait until there is space, overflow indicates gathering data faster than we can save
 	}
 }
 
@@ -697,8 +698,6 @@ void Mag_Task(void *argument)
 		output.head_z = z;
 
 		xQueueSend(MagQueue, &output, HAL_MAX_DELAY); // wait until there is space, overflow indicates gathering data faster than we can save
-
-		osDelay(9); // reading at 100 Hz so need to read every 9 ms and give 1 ms time to communicate (10 ms total)
 	}
 
 	return;
@@ -706,11 +705,25 @@ void Mag_Task(void *argument)
 
 void Humid_Task(void *argument)
 {
+	HumidCom_t output = {0};
+
+	for (;;)
+	{
+		xQueueSend(HumidQueue, &output, HAL_MAX_DELAY);
+	}
+
 	return;
 }
 
 void Board_Task(void * argument)
 {
+	BoardCom_t output = {0};
+
+	for (;;)
+	{
+		xQueueSend(BoardQueue, &output, HAL_MAX_DELAY); // just send empty info for now
+	}
+
 	return;
 }
 
@@ -726,7 +739,7 @@ void PiCom_Task(void * argument)
 	ThrusterCmd_t thrusterCommand;
 	ServoCmd_t servoCommand[8];
 
-	// TODO: Establish check communications with Raspberry Pi
+	// TODO: Establish communications check with Raspberry Pi
 	// TODO: Check which sensors are online for queue receiving
 	// TODO: Report to Raspberry Pi which sensors are offline
 
@@ -759,7 +772,7 @@ void PiCom_Task(void * argument)
 
 		/* distribute commands */
 		// TODO: Adjust queue timeouts in case of queue overflowing
-		// TODO: Avoid sending duplicate commands
+		// TODO: Avoid sending duplicate commands to thruster or servos
 		xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
 		for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &in.ServoCmd[i], 1);
 	}
