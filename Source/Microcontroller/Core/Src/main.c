@@ -57,9 +57,16 @@ UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart5;
 
 /* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
+osThreadId_t ledTaskHandle;
+const osThreadAttr_t ledTask_attributes = {
+  .name = "LED_Task",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
+osThreadId_t pwmTaskHandle;
+const osThreadAttr_t pwmTask_attributes = {
+  .name = "PWM_Task",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
@@ -79,7 +86,8 @@ static void MX_SPI2_Init(void);
 static void MX_UART5_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM4_Init(void);
-void StartDefaultTask(void *argument);
+void LED_Task(void *argument);
+void PWM_Task(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -153,7 +161,8 @@ int main(void)
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
+  pwmTaskHandle = osThreadNew(PWM_Task, NULL, &pwmTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -682,24 +691,35 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE END 4 */
 
-/* USER CODE BEGIN Header_StartDefaultTask */
-/**
-  * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartDefaultTask */
-void StartDefaultTask(void *argument)
+void LED_Task(void *argument)
 {
-  /* init code for USB_DEVICE */
-  MX_USB_DEVICE_Init();
-  /* USER CODE BEGIN 5 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END 5 */
+	for (;;)
+	{
+		HAL_GPIO_TogglePin(GPIOC, LED_OUT1_Pin);
+		osDelay(50);
+		HAL_GPIO_TogglePin(GPIOC, LED_OUT2_Pin);
+		osDelay(50);
+		HAL_GPIO_TogglePin(LED_OUT3_GPIO_Port, LED_OUT3_Pin);
+		osDelay(500);
+	}
+}
+
+void PWM_Task(void *argument)
+{
+	int16_t pulse = 1500;
+	int16_t step = 1;
+
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+	osDelay(10000);
+
+	for (;;)
+	{
+		pulse += step;
+		if (pulse >= 2100) step *= -1;
+		else if (pulse <= 900) step *= -1;
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse);
+	}
 }
 
 /**
