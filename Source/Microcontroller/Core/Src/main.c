@@ -151,6 +151,8 @@ int main(void)
 	IMUQueue = xQueueCreate(10, sizeof(IMUCom_t));
 	MagQueue = xQueueCreate(10, sizeof(MagCom_t));
 	Bar30Queue = xQueueCreate(10, sizeof(Bar30Com_t));
+	HumidQueue = xQueueCreate(10, sizeof(HumidCom_t));
+	BoardQueue = xQueueCreate(10, sizeof(BoardCom_t));
 	ThrusterQueue = xQueueCreate(10, sizeof(ThrusterCmd_t));
 	for(int i = 0; i < 8; i++) { ServoQueue[i] = xQueueCreate(10, sizeof(ServoCmd_t)); }
 

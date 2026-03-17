@@ -35,7 +35,7 @@ void LED_Task(void* argument)
 	{
 		HAL_GPIO_TogglePin(GPIOC, LED_OUT1_Pin);
 		osDelay(50);
-		HAL_GPIO_TogglePin(GPIOC, LED_OUT1_Pin);
+		HAL_GPIO_TogglePin(GPIOC, LED_OUT2_Pin);
 		osDelay(50);
 		HAL_GPIO_TogglePin(LED_OUT3_GPIO_Port, LED_OUT3_Pin);
 		osDelay(500);
@@ -224,7 +224,7 @@ void Servo_Task(void* argument)
 
 	for (;;)
 	{
-		xQueueReceive(ServoQueue[servo_index], &input, 0);
+		xQueueReceive(ServoQueue[servo_index], &input, 0); // don't Interrupt wave motion, just check for news
 	}
 }
 
@@ -246,6 +246,6 @@ void Thruster_Task(void* arugment)
 
 	for (;;)
 	{
-		xQueueReceive(ThrusterQueue, &input, 0);
+		xQueueReceive(ThrusterQueue, &input, portMAX_DELAY); // only update at new command
 	}
 }
