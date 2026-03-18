@@ -63,31 +63,31 @@ typedef struct
 	float gyro_x;
 	float gyro_y;
 	float gyro_z;
-}IMUCom_t;
+} IMUCom_t;
 
 typedef struct
 {
 	float head_x;
 	float head_y;
 	float head_z;
-}MagCom_t;
+} MagCom_t;
 
 typedef struct
 {
 	float pressure;
 	float water_temp;
-}Bar30Com_t;
+} Bar30Com_t;
 
 typedef struct
 {
 	float humidity;
 	float air_temp;
-}HumidCom_t;
+} HumidCom_t;
 
 typedef struct
 {
 	float board_temp;
-}BoardCom_t;
+} BoardCom_t;
 
 
 
@@ -96,11 +96,15 @@ typedef struct
  */
 typedef struct
 {
+	uint8_t SoP[2]; // header marking start of packet for alignment
+	uint8_t pad0[2]; // already automatically added for memory padding
 	IMUCom_t IMUCom;
 	MagCom_t MagCom;
 	Bar30Com_t Bar30Com;
 	HumidCom_t HumidCom;
 	BoardCom_t BoardCom;
+	uint8_t CheckSum; // for detecting corruption
+	uint8_t pad1; // already automatically added for memory padding
 } OutPacket_t;
 
 
@@ -110,8 +114,10 @@ typedef struct
  */
 typedef struct
 {
+	uint8_t Sop[2]; // header marking start of packet for alignment
 	ServoCmd_t ServoCmd[8];
 	ThrusterCmd_t ThrusterCmd;
+	uint8_t CheckSum;
 } InPacket_t;
 
 
@@ -127,6 +133,8 @@ typedef struct
 
 /* Function definitions for tasks and helper functions */
 void LED_Task(void* argument);
+
+uint8_t CalculateChecksum(uint8_t* data, size_t length);
 void PiCom_Task(void *argument);
 
 uint16_t angle_to_pulse(int16_t angle);

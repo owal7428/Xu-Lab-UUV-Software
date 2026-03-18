@@ -42,6 +42,18 @@ void LED_Task(void* argument)
 	}
 }
 
+
+
+uint8_t CalculateChecksum(uint8_t* data, size_t length)
+{
+    uint8_t cs = 0;
+    for (size_t i = 0; i < length; i++)
+    {
+        cs ^= data[i];  // XOR each byte
+    }
+    return cs;
+}
+
 /*
  *  Handles communication back and forth to and from the raspberry pi by assembling and deciphering packets
  */
@@ -69,21 +81,24 @@ void PiCom_Task(void * argument)
 		for (int i=0; i<8; i++) memset(&servoCommand[i], 0, sizeof(ServoCmd_t));
 
 		/* collect new data from all sensor queues into the outgoing packet */
+		out.SoP[0] = 0xAA;
+		out.SoP[1] = 0x55;
 		// TODO: Adjust queue timeouts in case of queues underflowing
 		xQueueReceive(IMUQueue, &out.IMUCom, 1);
 		xQueueReceive(MagQueue, &out.MagCom, 1);
 		xQueueReceive(Bar30Queue, &out.Bar30Com, 1);
 		xQueueReceive(HumidQueue, &out.HumidCom, 1);
 		xQueueReceive(BoardQueue, &out.BoardCom, 1);
+		out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - sizeof(out.CheckSum));
 
 		/* serialize packet struct into bytes */
 		memcpy(tx, &out, sizeof(OutPacket_t));
 
 		/* perform transfer (using NSS so no need to manually pull any chips low or high) */
-		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, HAL_MAX_DELAY);
+		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, portMAX_DELAY);
 
 		/* de-serialize byte packet into struct */
-		memcpy(rx, &in, sizeof(InPacket_t));
+		memcpy(&in, rx, sizeof(InPacket_t));
 
 		/* distribute commands */
 		// TODO: Adjust queue timeouts in case of queue overflowing
@@ -120,10 +135,17 @@ bool IMU_Init(void)
 void IMU_Task(void *argument)
 {
 	IMUCom_t output = {0};
+	output.acc_x = 1.0;
+	output.acc_y = 2.0;
+	output.acc_z = 3.0;
+	output.gyro_x = 4.0;
+	output.gyro_y = 5.0;
+	output.gyro_z = 6.0;
 
 	for (;;)
 	{
-		xQueueSend(IMUQueue, &output, HAL_MAX_DELAY);
+		xQueueSend(IMUQueue, &output, 1);
+		osDelay(1);
 	}
 }
 
@@ -137,10 +159,14 @@ bool Mag_Init(void)
 void Mag_Task(void *argument)
 {
 	MagCom_t output = {0};
+	output.head_x = 1.0;
+	output.head_y = 2.0;
+	output.head_z = 3.0;
 
 	for (;;)
 	{
-		xQueueSend(MagQueue, &output, HAL_MAX_DELAY);
+		xQueueSend(MagQueue, &output, portMAX_DELAY);
+		osDelay(1);
 	}
 }
 
@@ -154,10 +180,13 @@ void Bar30_Init(void)
 void Bar30_Task(void* argument)
 {
 	Bar30Com_t output = {0};
+	output.pressure = 1.0;
+	output.water_temp = 2.0;
 
 	for (;;)
 	{
-		xQueueSend(Bar30Queue, &output, HAL_MAX_DELAY);
+		xQueueSend(Bar30Queue, &output, portMAX_DELAY);
+		osDelay(1);
 	}
 }
 
@@ -171,10 +200,13 @@ bool Humid_Init(void)
 void Humid_Task(void *argument)
 {
 	HumidCom_t output = {0};
+	output.humidity = 1.0;
+	output.air_temp = 2.0;
 
 	for (;;)
 	{
-		xQueueSend(HumidQueue, &output, HAL_MAX_DELAY);
+		xQueueSend(HumidQueue, &output, portMAX_DELAY);
+		osDelay(1);
 	}
 }
 
@@ -188,10 +220,12 @@ bool Board_Init(void)
 void Board_Task(void *argument)
 {
 	BoardCom_t output = {0};
+	output.board_temp = 1.0;
 
 	for (;;)
 	{
-		xQueueSend(BoardQueue, &output, HAL_MAX_DELAY);
+		xQueueSend(BoardQueue, &output, portMAX_DELAY);
+		osDelay(1);
 	}
 }
 
@@ -225,6 +259,7 @@ void Servo_Task(void* argument)
 	for (;;)
 	{
 		xQueueReceive(ServoQueue[servo_index], &input, 0); // don't Interrupt wave motion, just check for news
+		osDelay(1);
 	}
 }
 
@@ -247,5 +282,6 @@ void Thruster_Task(void* arugment)
 	for (;;)
 	{
 		xQueueReceive(ThrusterQueue, &input, portMAX_DELAY); // only update at new command
+		osDelay(1);
 	}
 }

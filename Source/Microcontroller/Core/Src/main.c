@@ -96,6 +96,13 @@ const osThreadAttr_t servoTask_attributes = {
 	.priority = (osPriority_t) osPriorityNormal,
 };
 
+osThreadId_t picomTaskHandle;
+const osThreadAttr_t picomTask_attributes = {
+	.name = "PiCom_Task",
+	.stack_size = 1024 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityNormal,
+};
+
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
@@ -158,6 +165,7 @@ int main(void)
 
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
+	picomTaskHandle = osThreadNew(PiCom_Task, NULL, &picomTask_attributes);
 	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);
 	magTaskHandle = osThreadNew(Mag_Task, NULL, &magTask_attributes);
 	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
