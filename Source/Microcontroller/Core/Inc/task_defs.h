@@ -18,6 +18,7 @@
 
 #define INITPAUSE 7000 // 7.0 s
 #define PACKETSIZE 128 // 128 bytes
+#define RX_BUFFER_SIZE (PACKETSIZE * 2)
 
 
 
@@ -114,7 +115,7 @@ typedef struct
  */
 typedef struct
 {
-	uint8_t Sop[2]; // header marking start of packet for alignment
+	uint8_t SoP[2]; // header marking start of packet for alignment
 	ServoCmd_t ServoCmd[8];
 	ThrusterCmd_t ThrusterCmd;
 	uint8_t CheckSum;
@@ -125,8 +126,10 @@ typedef struct
 /* Helper struct for communicating to servos which channel and tim they are for initialization and ID */
 typedef struct
 {
+	uint8_t SoP[2];
     TIM_HandleTypeDef *tim;
     uint32_t channel;
+    uint8_t CheckSum;
 } ServoParams_t;
 
 

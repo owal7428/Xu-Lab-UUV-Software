@@ -54,6 +54,79 @@ uint8_t CalculateChecksum(uint8_t* data, size_t length)
     return cs;
 }
 
+int FindSoP(uint8_t *buf, size_t len)
+{
+    for (size_t i = 0; i < len - 1; i++)
+    {
+        if (buf[i] == 0xAA && buf[i + 1] == 0x55)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
+{
+	uint8_t rx_buffer[RX_BUFFER_SIZE];
+	size_t rx_len = 0;
+
+	// Append new SPI data to rolling buffer
+	if (rx_len + PACKETSIZE <= RX_BUFFER_SIZE)
+	{
+	    memcpy(&rx_buffer[rx_len], rx, PACKETSIZE);
+	    rx_len += PACKETSIZE;
+	}
+	else
+	{
+	    // Overflow protection: reset buffer
+	    rx_len = 0;
+	}
+
+	// Try to extract a valid packet
+	int packet_found = 0;
+	while (rx_len >= sizeof(InPacket_t))
+	{
+	    int idx = FindSoP(rx_buffer, rx_len);
+
+	    if (idx < 0)
+	    {
+	        // No SOP found, discard buffer
+	        rx_len = 0;
+	        break;
+	    }
+
+	    // Not enough data yet for full packet
+	    if ((size_t)(idx + sizeof(InPacket_t)) > rx_len) break;
+
+	    uint8_t *pkt_ptr = &rx_buffer[idx];
+
+	    // Compute checksum over received packet (excluding checksum field)
+	    uint8_t calc = CalculateChecksum(pkt_ptr, sizeof(InPacket_t) - sizeof(in->CheckSum));
+	    uint8_t recv = pkt_ptr[sizeof(InPacket_t) - 1];
+
+	    if (calc == recv)
+	    {
+	        // Valid packet
+	        memcpy(in, pkt_ptr, sizeof(InPacket_t));
+	        packet_found = 1;
+
+	        // Remove consumed bytes
+	        size_t consumed = idx + sizeof(InPacket_t);
+	        memmove(rx_buffer, &rx_buffer[consumed], rx_len - consumed);
+	        rx_len -= consumed;
+
+	        break; // process one packet per loop
+	    }
+	    else
+	    {
+	        // Bad checksum, shift by 1 and retry
+	        memmove(rx_buffer, &rx_buffer[idx + 1], rx_len - (idx + 1));
+	        rx_len -= (idx + 1);
+	    }
+	}
+}
+
 /*
  *  Handles communication back and forth to and from the raspberry pi by assembling and deciphering packets
  */
@@ -65,6 +138,7 @@ void PiCom_Task(void * argument)
 	InPacket_t in;
 	ThrusterCmd_t thrusterCommand;
 	ServoCmd_t servoCommand[8];
+	bool packet_found = false;
 
 	// TODO: Establish communications check with Raspberry Pi
 	// TODO: Check which sensors are online for queue receiving
@@ -97,14 +171,17 @@ void PiCom_Task(void * argument)
 		/* perform transfer (using NSS so no need to manually pull any chips low or high) */
 		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, portMAX_DELAY);
 
-		/* de-serialize byte packet into struct */
-		memcpy(&in, rx, sizeof(InPacket_t));
+		/* de-serialize byte packet into struct and confirm checksum */
+		packet_found = HandleInput(rx, &in);
 
 		/* distribute commands */
 		// TODO: Adjust queue timeouts in case of queue overflowing
 		// TODO: Avoid sending duplicate commands to thruster or servos
-		xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
-		for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &in.ServoCmd[i], 1);
+		if (packet_found)
+		{
+			xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
+			for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &in.ServoCmd[i], 1);
+		}
 	}
 }
 
