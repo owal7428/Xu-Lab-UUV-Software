@@ -44,6 +44,9 @@ void LED_Task(void* argument)
 
 
 
+/*
+ *  Step through data byte by byte and calculate xor checksum of all the data to check for corruption
+ */
 uint8_t CalculateChecksum(uint8_t* data, size_t length)
 {
     uint8_t cs = 0;
@@ -54,6 +57,9 @@ uint8_t CalculateChecksum(uint8_t* data, size_t length)
     return cs;
 }
 
+/*
+ *  Find the Start of Packet and return the index for synchronizing communication
+ */
 int FindSoP(uint8_t *buf, size_t len)
 {
     for (size_t i = 0; i < len - 1; i++)
@@ -66,6 +72,11 @@ int FindSoP(uint8_t *buf, size_t len)
     return -1;
 }
 
+/*
+ *  Handle synchronization, checksum, and packet casting
+ *  	returns true if packet is found
+ *  	returns false otherwise
+ */
 bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 {
 	uint8_t rx_buffer[RX_BUFFER_SIZE];
@@ -187,16 +198,25 @@ void PiCom_Task(void * argument)
 
 
 
+/*
+ *  Helper function to write to a specific register on a specific SPI line and on a specific chip select
+ */
 void SPI_WriteReg(uint8_t line, uint8_t chip, uint8_t reg, uint8_t data)
 {
 	//
 }
 
+/*
+ *  Helper function to read from a specific register on a specific SPI line and on a specific chip select
+ */
 uint8_t SPI_ReadReg(uint8_t line, uint8_t chip, uint8_t reg)
 {
 	//
 }
 
+/*
+ *  Helper function to read multiple bytes of data from a specific SPI line on a specific chip select
+ */
 void SPI_Read(uint8_t line, uint8_t chip, uint8_t reg, uint8_t* buffer, uint8_t length)
 {
 	//
@@ -204,11 +224,17 @@ void SPI_Read(uint8_t line, uint8_t chip, uint8_t reg, uint8_t* buffer, uint8_t 
 
 
 
+/*
+ *  Initialize the settings of the IMU to prepare for active reading
+ */
 bool IMU_Init(void)
 {
 	//
 }
 
+/*
+ *  Task definition for continuous reading from IMU
+ */
 void IMU_Task(void *argument)
 {
 	IMUCom_t output = {0};
@@ -228,11 +254,17 @@ void IMU_Task(void *argument)
 
 
 
+/*
+ *  Initialize the settings of the Magnetometer to prepare for active reading
+ */
 bool Mag_Init(void)
 {
 	//
 }
 
+/*
+ *  Task definition for continuous reading from Magnetometer
+ */
 void Mag_Task(void *argument)
 {
 	MagCom_t output = {0};
@@ -249,11 +281,17 @@ void Mag_Task(void *argument)
 
 
 
+/*
+ *  Initialize the settings of the Bar30 Pressure/Temp sensor to prepare for active reading
+ */
 void Bar30_Init(void)
 {
 	//
 }
 
+/*
+ *  Task definition for continuous reading from Bar30 Pressure/Temp Sensor
+ */
 void Bar30_Task(void* argument)
 {
 	Bar30Com_t output = {0};
@@ -269,11 +307,17 @@ void Bar30_Task(void* argument)
 
 
 
+/*
+ *  Initialize the settings of the Humidity sensor to prepare for active reading
+ */
 bool Humid_Init(void)
 {
 	//
 }
 
+/*
+ *  Task definition for continuous reading from Humidity sensor
+ */
 void Humid_Task(void *argument)
 {
 	HumidCom_t output = {0};
@@ -289,11 +333,17 @@ void Humid_Task(void *argument)
 
 
 
+/*
+ *  Initialize the settings of the Board temperature sensor to prepare for active reading
+ */
 bool Board_Init(void)
 {
 	//
 }
 
+/*
+ *  Task definition for continuous reading from Board temperature sensor
+ */
 void Board_Task(void *argument)
 {
 	BoardCom_t output = {0};
@@ -308,16 +358,25 @@ void Board_Task(void *argument)
 
 
 
+/*
+ *  Helper function to convert an angle in degrees to a bounds checked pulse width
+ */
 uint16_t angle_to_pulse(int16_t angle)
 {
 	//
 }
 
+/*
+ *  Initialize the positions of the servos to prepare for actuation
+ */
 void Servo_Init(TIM_HandleTypeDef* tim, uint32_t channel)
 {
 	//
 }
 
+/*
+ *  Task definition for continuous actuation of the servos
+ */
 void Servo_Task(void* argument)
 {
 	ServoParams_t* params = (ServoParams_t*)argument;
@@ -342,16 +401,25 @@ void Servo_Task(void* argument)
 
 
 
+/*
+ *  Helper function to convert an integer percentage from -100% to 100% to a bounds checked pulse width
+ */
 uint16_t percent_to_pulse(int8_t percent)
 {
 	//
 }
 
+/*
+ *  Specific initialization routine for hardware
+ */
 void Thruster_Init(void)
 {
 	//
 }
 
+/*
+ *  Task definition for continuous commanding of the thruster
+ */
 void Thruster_Task(void* arugment)
 {
 	ThrusterCmd_t input;

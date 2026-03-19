@@ -116,9 +116,11 @@ typedef struct
 typedef struct
 {
 	uint8_t SoP[2]; // header marking start of packet for alignment
+	uint8_t pad0[2]; // explicit memory padding
 	ServoCmd_t ServoCmd[8];
 	ThrusterCmd_t ThrusterCmd;
 	uint8_t CheckSum;
+	uint8_t pad1; // explicit memory padding
 } InPacket_t;
 
 
@@ -134,37 +136,15 @@ typedef struct
 
 
 
-/* Function definitions for tasks and helper functions */
+/* Function definitions for tasks to be called in main.c */
 void LED_Task(void* argument);
-
-uint8_t CalculateChecksum(uint8_t* data, size_t length);
 void PiCom_Task(void *argument);
-
-uint16_t angle_to_pulse(int16_t angle);
-void Servo_Init(TIM_HandleTypeDef* tim, uint32_t channel);
 void Servo_Task(void* argument);
-
-uint16_t percent_to_pulse(int8_t percent);
-void Thruster_Init(void);
 void Thruster_Task(void* arugment);
-
-void SPI_WriteReg(uint8_t line, uint8_t chip, uint8_t reg, uint8_t data);
-uint8_t SPI_ReadReg(uint8_t line, uint8_t chip, uint8_t reg);
-void SPI_Read(uint8_t line, uint8_t chip, uint8_t reg, uint8_t* buffer, uint8_t length);
-
-bool IMU_Init(void);
 void IMU_Task(void *argument);
-
-bool Mag_Init(void);
 void Mag_Task(void *argument);
-
-void Bar30_Init(void);
 void Bar30_Task(void* argument);
-
-bool Humid_Init(void);
 void Humid_Task(void *argument);
-
-bool Board_Init(void);
 void Board_Task(void *argument);
 
 #endif /* CORE_INC_TASK_DEFS_H_ */
