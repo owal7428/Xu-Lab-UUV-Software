@@ -20,6 +20,7 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "usb_device.h"
+#include <math.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -72,6 +73,10 @@ const osThreadAttr_t pwmTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 
+/* Max fidelity we can pre-calculate before we get stack-overflows */
+#define WAVESIZE (1<<14)
+float sin_t[WAVESIZE];
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -104,88 +109,91 @@ void PWM_Task(void *argument);
   */
 int main(void)
 {
+	for (int i=0; i<WAVESIZE; i++)
+	{
+		sin_t[i] = sin(i*2*M_PI/WAVESIZE);
+	}
+	/* USER CODE BEGIN 1 */
 
-  /* USER CODE BEGIN 1 */
+	/* USER CODE END 1 */
 
-  /* USER CODE END 1 */
+	/* MCU Configuration--------------------------------------------------------*/
 
-  /* MCU Configuration--------------------------------------------------------*/
+	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+	HAL_Init();
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+	/* USER CODE BEGIN Init */
 
-  /* USER CODE BEGIN Init */
+	/* USER CODE END Init */
 
-  /* USER CODE END Init */
+	/* Configure the system clock */
+	SystemClock_Config();
 
-  /* Configure the system clock */
-  SystemClock_Config();
+	/* USER CODE BEGIN SysInit */
 
-  /* USER CODE BEGIN SysInit */
+	/* USER CODE END SysInit */
 
-  /* USER CODE END SysInit */
+	/* Initialize all configured peripherals */
+	MX_GPIO_Init();
+	MX_I2C1_Init();
+	MX_SPI1_Init();
+	MX_TIM2_Init();
+	MX_TIM3_Init();
+	MX_UART4_Init();
+	MX_SPI2_Init();
+	MX_UART5_Init();
+	MX_ADC1_Init();
+	MX_TIM4_Init();
+	/* USER CODE BEGIN 2 */
 
-  /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_I2C1_Init();
-  MX_SPI1_Init();
-  MX_TIM2_Init();
-  MX_TIM3_Init();
-  MX_UART4_Init();
-  MX_SPI2_Init();
-  MX_UART5_Init();
-  MX_ADC1_Init();
-  MX_TIM4_Init();
-  /* USER CODE BEGIN 2 */
+	/* USER CODE END 2 */
 
-  /* USER CODE END 2 */
+	/* Init scheduler */
+	osKernelInitialize();
 
-  /* Init scheduler */
-  osKernelInitialize();
+	/* USER CODE BEGIN RTOS_MUTEX */
+	/* add mutexes, ... */
+	/* USER CODE END RTOS_MUTEX */
 
-  /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
-  /* USER CODE END RTOS_MUTEX */
+	/* USER CODE BEGIN RTOS_SEMAPHORES */
+	/* add semaphores, ... */
+	/* USER CODE END RTOS_SEMAPHORES */
 
-  /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
-  /* USER CODE END RTOS_SEMAPHORES */
+	/* USER CODE BEGIN RTOS_TIMERS */
+	/* start timers, add new ones, ... */
+	/* USER CODE END RTOS_TIMERS */
 
-  /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
-  /* USER CODE END RTOS_TIMERS */
+	/* USER CODE BEGIN RTOS_QUEUES */
+	/* add queues, ... */
+	/* USER CODE END RTOS_QUEUES */
 
-  /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
-  /* USER CODE END RTOS_QUEUES */
+	/* Create the thread(s) */
+	/* creation of defaultTask */
+	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
+	pwmTaskHandle = osThreadNew(PWM_Task, NULL, &pwmTask_attributes);
 
-  /* Create the thread(s) */
-  /* creation of defaultTask */
-  ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
-  pwmTaskHandle = osThreadNew(PWM_Task, NULL, &pwmTask_attributes);
+	/* USER CODE BEGIN RTOS_THREADS */
+	/* add threads, ... */
+	/* USER CODE END RTOS_THREADS */
 
-  /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
-  /* USER CODE END RTOS_THREADS */
+	/* USER CODE BEGIN RTOS_EVENTS */
+	/* add events, ... */
+	/* USER CODE END RTOS_EVENTS */
 
-  /* USER CODE BEGIN RTOS_EVENTS */
-  /* add events, ... */
-  /* USER CODE END RTOS_EVENTS */
+	/* Start scheduler */
+	osKernelStart();
 
-  /* Start scheduler */
-  osKernelStart();
+	/* We should never get here as control is now taken by the scheduler */
 
-  /* We should never get here as control is now taken by the scheduler */
+	/* Infinite loop */
+	/* USER CODE BEGIN WHILE */
+	while (1)
+	{
+	/* USER CODE END WHILE */
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-  }
-  /* USER CODE END 3 */
+	/* USER CODE BEGIN 3 */
+	}
+	/* USER CODE END 3 */
 }
 
 /**
@@ -704,21 +712,56 @@ void LED_Task(void *argument)
 	}
 }
 
+uint16_t angle_to_pulse(int16_t angle)
+{
+	if (angle > 80) angle = 80;
+	if (angle < -80) angle = -80;
+
+	angle += (87.5); // center of 175 degree range of which we use 160 degrees
+
+	return 900 + ((uint32_t)angle * 1200) / 175;
+}
+
 void PWM_Task(void *argument)
 {
 	int16_t pulse = 1500;
+	int16_t index = 0;
+	float angle = 0;
 	int16_t step = 1;
 
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pulse);
 	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-	osDelay(10000);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+	osDelay(1000); // give servo a second to reset to 0 position
 
 	for (;;)
 	{
-		pulse += step;
-		if (pulse >= 2100) step *= -1;
-		else if (pulse <= 900) step *= -1;
+		angle = 80*sin_t[index];
+		pulse = angle_to_pulse(lroundf(angle));
+		// stream to all 8 servo pinouts
 		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pulse);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, pulse);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pulse);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, pulse);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pulse);
+		index = (index + step) % WAVESIZE;
+		osDelay(1); // 1 ms delay
 	}
 }
 
