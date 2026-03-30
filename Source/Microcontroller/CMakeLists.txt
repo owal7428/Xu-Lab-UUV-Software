@@ -46,6 +46,9 @@ enable_language(C ASM)
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
 
+# Make sure explicitly that .elf suffix is included for windows users
+set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES SUFFIX ".elf")
+
 target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE
     -mcpu=cortex-m4
     -mthumb
@@ -64,6 +67,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+	Core/Src/task_defs.c
     # Add user sources here
 )
 
