@@ -1,0 +1,12 @@
+# Ignore CubeIDE auto generated files
+.settings/
+Debug/
+Release/
+Sources/
+config_default/
+.cproject
+.project
+*.launch
+
+# This stuff is already in Core/Startup/, don't need a copy
+Startup/
