@@ -295,10 +295,14 @@ void IMU_Task(void *argument)
 
 /*
  *  Initialize the settings of the Magnetometer to prepare for active reading
+ *  	who_am_i = 0x30
  */
 bool Mag_Init(void)
 {
-	//
+	SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x10); // set magnetometer
+	osDelay(5);
+	SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x20); // set automatic set/reset
+	return (SPI_ReadReg(SPI1_CS2_Pin, 0x2F) == 0x30); // return ID check to return online/offline
 }
 
 /*
@@ -308,14 +312,42 @@ bool Mag_Init(void)
 void Mag_Task(void *argument)
 {
 	MagCom_t output = {0};
-	output.head_x = 1.0;
-	output.head_y = 2.0;
-	output.head_z = 3.0;
+	float x,y,z;
+	uint32_t raw_x, raw_y, raw_z;
+	uint8_t buffer[7];
+
+	if (!Mag_Init()) return;
+	osDelay(INITPAUSE);
 
 	for (;;)
 	{
-		xQueueSend(MagQueue, &output, portMAX_DELAY);
-		osDelay(1);
+		SPI_WriteReg(SPI1_CS2_Pin, 0x09,0x01); // initiate measurement
+		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01)); // wait for reading to be ready
+		SPI_Read(SPI1_CS2_Pin, 0x00, buffer, 7); // read all 7 registers of data (0x00 - 0x06)
+
+		// take 18 bit data
+		raw_x =
+			((uint32_t)buffer[0] << 10) |
+			((uint32_t)buffer[1] << 2)  |
+			((buffer[6] >> 6) & 0x03);
+
+		raw_y =
+			((uint32_t)buffer[2] << 10) |
+			((uint32_t)buffer[3] << 2)  |
+			((buffer[6] >> 6) & 0x03);
+
+		raw_z =
+			((uint32_t)buffer[4] << 10) |
+			((uint32_t)buffer[5] << 2)  |
+			((buffer[6] >> 6) & 0x03);
+
+		// convert to signed gaussian units
+		output.head_x = (raw_x - 131072) / 16384.0f;
+		output.head_y = (raw_y - 131072) / 16384.0f;
+		output.head_z = (raw_z - 131072) / 16384.0f;
+
+		// don't wait if queue is full, avoid old data piling up
+		xQueueSend(MagQueue, &output, 0);
 	}
 }
 
