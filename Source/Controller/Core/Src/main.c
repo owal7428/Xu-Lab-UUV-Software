@@ -150,6 +150,7 @@ int main(void)
 	/* force all pins high as soon as possible for SPI1 */
 	HAL_GPIO_WritePin(GPIOC, SPI1_CS0_Pin, GPIO_PIN_SET);
 	HAL_GPIO_WritePin(GPIOC, SPI1_CS1_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS2_Pin, GPIO_PIN_SET);
 
 	/* Enforce only one device to communicate over SPI line at a time */
 	spiMutex = osMutexNew(NULL);

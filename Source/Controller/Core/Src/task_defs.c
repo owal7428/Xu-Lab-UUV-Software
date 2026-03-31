@@ -201,25 +201,63 @@ void PiCom_Task(void * argument)
 /*
  *  Helper function to write to a specific register on a specific SPI line and on a specific chip select
  */
-void SPI_WriteReg(uint8_t line, uint8_t chip, uint8_t reg, uint8_t data)
+void SPI_WriteReg(uint16_t chip, uint8_t reg, uint8_t data)
 {
-	//
+	uint8_t tx[2];
+	tx[0] = reg & 0x7F;   // write mode
+	tx[1] = data;
+
+	osMutexAcquire(spiMutex, osWaitForever);
+	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_RESET);
+
+	HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+
+	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_SET);
+	osMutexRelease(spiMutex);
 }
 
 /*
  *  Helper function to read from a specific register on a specific SPI line and on a specific chip select
  */
-uint8_t SPI_ReadReg(uint8_t line, uint8_t chip, uint8_t reg)
+uint8_t SPI_ReadReg(uint16_t chip, uint8_t reg)
 {
-	//
+	uint8_t tx[2];
+	uint8_t rx[2];
+
+	tx[0] = reg | 0x80;
+	tx[1] = 0x00;
+
+	osMutexAcquire(spiMutex, osWaitForever);
+	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_RESET);
+
+	HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
+
+	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_SET);
+	osMutexRelease(spiMutex);
+
+	return rx[1];
 }
 
 /*
  *  Helper function to read multiple bytes of data from a specific SPI line on a specific chip select
  */
-void SPI_Read(uint8_t line, uint8_t chip, uint8_t reg, uint8_t* buffer, uint8_t length)
+void SPI_Read(uint16_t chip, uint8_t reg, uint8_t* buffer, uint8_t length)
 {
-	//
+	uint8_t tx[length + 1];
+	uint8_t rx[length + 1];
+
+	tx[0] = reg | 0x80;   // read + auto increment
+	memset(&tx[1], 0, length);
+
+	osMutexAcquire(spiMutex, osWaitForever);
+	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_RESET);
+
+	HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
+
+	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_SET);
+	osMutexRelease(spiMutex);
+
+	memcpy(buffer, &rx[1], length);
 }
 
 
@@ -234,6 +272,7 @@ bool IMU_Init(void)
 
 /*
  *  Task definition for continuous reading from IMU
+ *  	SPI 1 Chip 1
  */
 void IMU_Task(void *argument)
 {
@@ -264,6 +303,7 @@ bool Mag_Init(void)
 
 /*
  *  Task definition for continuous reading from Magnetometer
+ *  	SPI 1 Chip 2
  */
 void Mag_Task(void *argument)
 {
