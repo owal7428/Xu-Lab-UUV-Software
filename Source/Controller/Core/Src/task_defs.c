@@ -77,7 +77,7 @@ int FindSoP(uint8_t *buf, size_t len)
  *  	returns true if packet is found
  *  	returns false otherwise
  */
-bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
+bool FindInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 {
 	uint8_t rx_buffer[RX_BUFFER_SIZE];
 	size_t rx_len = 0;
@@ -95,7 +95,6 @@ bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 	}
 
 	// Try to extract a valid packet
-	int packet_found = 0;
 	while (rx_len >= sizeof(InPacket_t))
 	{
 	    int idx = FindSoP(rx_buffer, rx_len);
@@ -120,14 +119,13 @@ bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 	    {
 	        // Valid packet
 	        memcpy(in, pkt_ptr, sizeof(InPacket_t));
-	        packet_found = 1;
 
 	        // Remove consumed bytes
 	        size_t consumed = idx + sizeof(InPacket_t);
 	        memmove(rx_buffer, &rx_buffer[consumed], rx_len - consumed);
 	        rx_len -= consumed;
 
-	        break; // process one packet per loop
+	        return true; // process one packet per loop
 	    }
 	    else
 	    {
@@ -136,6 +134,7 @@ bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 	        rx_len -= (idx + 1);
 	    }
 	}
+	return false;
 }
 
 /*
@@ -183,15 +182,15 @@ void PiCom_Task(void * argument)
 		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, portMAX_DELAY);
 
 		/* de-serialize byte packet into struct and confirm checksum */
-		packet_found = HandleInput(rx, &in);
+		packet_found = FindInput(rx, &in);
 
 		/* distribute commands */
 		// TODO: Adjust queue timeouts in case of queue overflowing
 		// TODO: Avoid sending duplicate commands to thruster or servos
 		if (packet_found)
 		{
-			xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
-			for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &in.ServoCmd[i], 1);
+			xQueueSend(ThrusterQueue, &thrusterCommand, 1);
+			for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &servoCommand[i], 1);
 		}
 	}
 }
@@ -267,7 +266,7 @@ void SPI_Read(uint16_t chip, uint8_t reg, uint8_t* buffer, uint8_t length)
  */
 bool IMU_Init(void)
 {
-	//
+	return false;
 }
 
 /*
@@ -312,7 +311,6 @@ bool Mag_Init(void)
 void Mag_Task(void *argument)
 {
 	MagCom_t output = {0};
-	float x,y,z;
 	uint32_t raw_x, raw_y, raw_z;
 	uint8_t buffer[7];
 
@@ -356,9 +354,9 @@ void Mag_Task(void *argument)
 /*
  *  Initialize the settings of the Bar30 Pressure/Temp sensor to prepare for active reading
  */
-void Bar30_Init(void)
+bool Bar30_Init(void)
 {
-	//
+	return false;
 }
 
 /*
@@ -384,7 +382,7 @@ void Bar30_Task(void* argument)
  */
 bool Humid_Init(void)
 {
-	//
+	return false;
 }
 
 /*
@@ -410,7 +408,7 @@ void Humid_Task(void *argument)
  */
 bool Board_Init(void)
 {
-	//
+	return false;
 }
 
 /*
@@ -435,7 +433,7 @@ void Board_Task(void *argument)
  */
 uint16_t angle_to_pulse(int16_t angle)
 {
-	//
+	return 0;
 }
 
 /*
@@ -478,7 +476,7 @@ void Servo_Task(void* argument)
  */
 uint16_t percent_to_pulse(int8_t percent)
 {
-	//
+	return 0;
 }
 
 /*
