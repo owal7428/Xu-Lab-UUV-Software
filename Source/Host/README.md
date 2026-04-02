@@ -7,3 +7,4 @@
   - AVCodec
   - AVUtil
 - Protobuf
+- ZeroMQ

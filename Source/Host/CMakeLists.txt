@@ -38,3 +38,9 @@ target_link_directories(Host PRIVATE ${AVFORMAT_LIBRARY_DIRS} ${AVCODEC_LIBRARY_
 
 find_package(Protobuf REQUIRED)
 target_link_libraries(Host PRIVATE protobuf::libprotobuf)
+
+# Link ZeroMQ
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZMQ REQUIRED libzmq)
+target_link_libraries(Host PRIVATE ${ZMQ_LDFLAGS})
