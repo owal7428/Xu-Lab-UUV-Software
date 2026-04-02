@@ -23,6 +23,8 @@ osMutexId_t spiMutex;
 
 /* Array to store parameters that ID each servo task to its corresponding servo */
 ServoParams_t servoParams[2][4];
+/* Array to store pre-calculated sin wave */
+float sin_a[SERVO_ARRAY_SIZE];
 
 
 
@@ -96,9 +98,8 @@ bool FindInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 	{
 	    int idx = FindSoP(rx_buffer, rx_len);
 
-	    if (idx < 0)
+	    if (idx < 0) // No SOP found, discard buffer
 	    {
-	        // No SOP found, discard buffer
 	        rx_len = 0;
 	        break;
 	    }
@@ -112,9 +113,8 @@ bool FindInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 	    uint8_t calc = CalculateChecksum(pkt_ptr, sizeof(InPacket_t) - sizeof(in->CheckSum));
 	    uint8_t recv = pkt_ptr[sizeof(InPacket_t) - 1];
 
-	    if (calc == recv)
+	    if (calc == recv) // Valid packet
 	    {
-	        // Valid packet
 	        memcpy(in, pkt_ptr, sizeof(InPacket_t));
 
 	        // Remove consumed bytes
@@ -124,9 +124,8 @@ bool FindInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 
 	        return true; // process one packet per loop
 	    }
-	    else
+	    else // Bad checksum, shift by 1 and retry
 	    {
-	        // Bad checksum, shift by 1 and retry
 	        memmove(rx_buffer, &rx_buffer[idx + 1], rx_len - (idx + 1));
 	        rx_len -= (idx + 1);
 	    }
@@ -167,7 +166,7 @@ bool HandleInput(InPacket_t input, ThrusterCmd_t* thrusterCmd, ServoCmd_t servoC
 	else
 		valid = false;
 
-	thrusterCmd->thrust = thrust;
+	thrusterCmd->thrust = (int8_t)lroundf(thrust);
 
 	return valid;
 }

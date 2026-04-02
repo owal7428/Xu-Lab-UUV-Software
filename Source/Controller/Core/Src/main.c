@@ -38,6 +38,7 @@ extern osMutexId_t spiMutex;
 TIM_HandleTypeDef* tims[2] = {&htim2, &htim3};
 uint32_t channels[4] = {TIM_CHANNEL_1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_4};
 extern ServoParams_t servoParams[2][4];
+extern float sin_a[SERVO_ARRAY_SIZE];
 
 /* Definitions for task space and handles */
 osThreadId_t ledTaskHandle;
@@ -125,6 +126,12 @@ int main(void)
 	/* MCU Configuration--------------------------------------------------------*/
 	tims[0] = &htim2;
 	tims[1] = &htim3;
+
+	/* pre-calulate sin wave for servo motion */
+	for (int i=0; i<SERVO_ARRAY_SIZE; i++)
+	{
+		sin_a[i] = sin((2*M_PI*i) / SERVO_ARRAY_SIZE);
+	}
 
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();

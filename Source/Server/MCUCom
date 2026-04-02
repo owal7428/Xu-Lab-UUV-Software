@@ -81,8 +81,9 @@ class OutPacket(ctypes.Structure):
     _fields_ = [
         ("SoP", ctypes.c_uint8*2),
         ("pad0", ctypes.c_uint8*2), # mimic STM32 padding
-        ("ServoCmd", ServoCmd_t*8),
-        ("ThrusterCmd", ThrusterCmd_t),
+        ("Command", ctypes.c_char*4),
+        ("Value", ctypes.c_float),
+        ("Thrust", ctypes.c_float),
         ("CheckSum", ctypes.c_uint8),
         ("pad1", ctypes.c_uint8),
     ]
@@ -91,15 +92,11 @@ class OutPacket(ctypes.Structure):
 out = OutPacket()
 
 # Fill in dummy commands
-for i in range(8):
-    out.ServoCmd[i].amplitude = 80
-    out.ServoCmd[i].speed = 1
-    out.ServoCmd[i].horz_offset = 0
-    out.ServoCmd[i].vert_offset = 0
-
-out.ThrusterCmd.thrust = 50
 out.SoP[0] = 0xAA
 out.SoP[1] = 0x55
+out.Command = "fwd"
+out.Value = 1.0
+out.Thrust = 100
 out.CheckSum = CalculateChecksum(bytearray(out))
 
 packet_bytes = ctypes.string_at(ctypes.byref(out), ctypes.sizeof(out))
@@ -115,8 +112,6 @@ rx = bytearray(128)
 packet_len = ctypes.sizeof(InPacket)
 
 while (1):
-    # rx.extend(spi.readbytes(32))
-    # rx.extend(spi.xfer2([0x00] * 32))
     rx.extend(spi.xfer2(tx))
     while (len(rx) >= PACKETSIZE):
         if (rx[0] == 0xAA and rx[1] == 0x55):
