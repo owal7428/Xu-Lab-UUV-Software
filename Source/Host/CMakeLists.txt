@@ -4,11 +4,19 @@ project(XuLabHost)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SOURCES Host.cpp VideoReceiver.cpp FrameBuffer.cpp Renderer.cpp Shader.cpp ThirdParty/gl.c)
+set(SOURCES 
+    Host.cpp;
+    VideoReceiver.cpp;
+    FrameBuffer.cpp;
+    Renderer.cpp;
+    Shader.cpp;
+    Protobuf/ControlMessage.pb.cc;
+    ThirdParty/gl.c;
+    )
 
 add_executable(Host ${SOURCES})
 
-target_include_directories(Host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty)
+target_include_directories(Host PRIVATE ThirdParty)
 
 # Link OpenGL
 
@@ -36,8 +44,9 @@ target_link_directories(Host PRIVATE ${AVFORMAT_LIBRARY_DIRS} ${AVCODEC_LIBRARY_
 
 # Link Protobuf
 
-find_package(Protobuf REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
 target_link_libraries(Host PRIVATE protobuf::libprotobuf)
+target_include_directories(Host PRIVATE ${Protobuf_INCLUDE_DIRS})
 
 # Link ZeroMQ
 
