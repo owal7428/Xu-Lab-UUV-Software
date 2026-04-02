@@ -117,8 +117,9 @@ typedef struct
 {
 	uint8_t SoP[2]; // header marking start of packet for alignment
 	uint8_t pad0[2]; // explicit memory padding
-	ServoCmd_t ServoCmd[8];
-	ThrusterCmd_t ThrusterCmd;
+	char Command[4];
+	float Value;
+	float Thrust;
 	uint8_t CheckSum;
 	uint8_t pad1; // explicit memory padding
 } InPacket_t;
@@ -128,10 +129,8 @@ typedef struct
 /* Helper struct for communicating to servos which channel and tim they are for initialization and ID */
 typedef struct
 {
-	uint8_t SoP[2];
     TIM_HandleTypeDef *tim;
     uint32_t channel;
-    uint8_t CheckSum;
 } ServoParams_t;
 
 

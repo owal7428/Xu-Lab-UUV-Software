@@ -89,10 +89,7 @@ bool FindInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 	    rx_len += PACKETSIZE;
 	}
 	else
-	{
-	    // Overflow protection: reset buffer
-	    rx_len = 0;
-	}
+	    rx_len = 0; // Overflow protection: reset buffer
 
 	// Try to extract a valid packet
 	while (rx_len >= sizeof(InPacket_t))
@@ -135,6 +132,44 @@ bool FindInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 	    }
 	}
 	return false;
+}
+
+bool HandleInput(InPacket_t input, ThrusterCmd_t* thrusterCmd, ServoCmd_t servoCmd[8])
+{
+	bool valid = true;
+	float thrust = input.Thrust;
+	float value = input.Value;
+	char* cmd = input.Command;
+
+	// command interpretation ladder concerned with servos
+	if (!strcmp(cmd, "fwd")) // forward
+	{
+		for (int i=0; i<8; i++)
+		{
+			servoCmd[i].amplitude = 80 * value;
+			servoCmd[i].speed = (uint16_t)lroundf(100 * value);
+			servoCmd[i].vert_offset = 0;
+			if (i%2 == 0) servoCmd[i].horz_offset = 180;
+			else servoCmd[i].horz_offset = 0;
+		}
+	}
+	else if (!strcmp(cmd, "bwd")) // backward
+	{
+		for (int i=0; i<8; i++)
+		{
+			servoCmd[i].amplitude = 80 * value;
+			servoCmd[i].speed = (uint16_t)lroundf(100 * value);
+			servoCmd[i].vert_offset = 0;
+			if (i%2 == 0) servoCmd[i].horz_offset = 180;
+			else servoCmd[i].horz_offset = 0;
+		}
+	}
+	else
+		valid = false;
+
+	thrusterCmd->thrust = thrust;
+
+	return valid;
 }
 
 /*
@@ -189,8 +224,11 @@ void PiCom_Task(void * argument)
 		// TODO: Avoid sending duplicate commands to thruster or servos
 		if (packet_found)
 		{
-			xQueueSend(ThrusterQueue, &thrusterCommand, 1);
-			for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &servoCommand[i], 1);
+			if (HandleInput(in, &thrusterCommand, servoCommand))
+			{
+				xQueueSend(ThrusterQueue, &thrusterCommand, 1);
+				for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &servoCommand[i], 1);
+			}
 		}
 	}
 }
