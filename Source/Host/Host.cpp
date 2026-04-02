@@ -82,6 +82,9 @@ int main(int argc, char* argv[])
 
     printf("Press keys or controller buttons. ESC or window close to quit.\n\n");
 
+    /* TODO: Receiver will block until connection is made, so input can't send without video connection being made.
+     * This should be changed in the future to allow for input connection first and auto-retry video. */
+
     FrameBuffer Buffer = FrameBuffer(BufferSize);
     VideoReceiver Receiver = VideoReceiver(URL, &Buffer);
 
