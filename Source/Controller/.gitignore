@@ -7,6 +7,3 @@ config_default/
 .cproject
 .project
 *.launch
-
-# This stuff is already in Core/Startup/, don't need a copy
-Startup/
