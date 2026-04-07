@@ -4,8 +4,11 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include "Protobuf/ControlMessage.pb.h"
+
 #include "FrameBuffer.hpp"
 #include "Renderer.hpp"
+#include "NetworkClient.hpp"
 #include "VideoReceiver.hpp"
 
 void Cleanup(SDL_Window* Window)
@@ -95,14 +98,20 @@ int main(int argc, char* argv[])
     Renderer FrameRenderer = Renderer(Width, Height, BufferingCutoff, &Buffer, "../Shaders/YUVToRGB");
     
     Receiver.StartReceiveLoop();
+
+    NetworkClient NetClient(URL);
+
+    ControlMessage::ControlMessage NetMessage;
     
     bool IsRunning = true;
 
     double NextRenderTime = 0.0f;
+    double NextNetUpdateTime = 0.0f;
 
     // Begin event loop
     while (IsRunning) 
     {
+        // Current time in seconds
         double CurrentTime = static_cast<double>(SDL_GetTicks()) / 1000.0f;
 
         // Get input
@@ -169,18 +178,22 @@ int main(int argc, char* argv[])
                         
                         case SDL_GAMEPAD_AXIS_LEFTY:
                             printf("Gamepad left stick vertical: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_forward(static_cast<float>(Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_RIGHTX:
                             printf("Gamepad right stick horizontal: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_roll(static_cast<float>(Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_RIGHTY:
                             printf("Gamepad right stick vertical: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_pitch(static_cast<float>(Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
                             printf("Gamepad left trigger: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_thrust(static_cast<float>(Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
@@ -203,6 +216,18 @@ int main(int argc, char* argv[])
         {
             if (FrameRenderer.Render(CurrentTime, NextRenderTime) >= 0)
                 SDL_GL_SwapWindow(Window);
+        }
+
+        if (CurrentTime >= NextNetUpdateTime)
+        {
+            std::string OutputStr;
+
+            bool Success = NetMessage.SerializeToString(&OutputStr);
+
+            if (Success)
+                NetClient.Send(OutputStr);
+
+            NextNetUpdateTime = CurrentTime + 0.01f; // Send input updates at 100 Hz
         }
     }
 

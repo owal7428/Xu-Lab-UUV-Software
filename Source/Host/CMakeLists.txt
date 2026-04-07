@@ -10,6 +10,7 @@ set(SOURCES
     FrameBuffer.cpp;
     Renderer.cpp;
     Shader.cpp;
+    NetworkClient.cpp;
     Protobuf/ControlMessage.pb.cc;
     ThirdParty/gl.c;
     )
