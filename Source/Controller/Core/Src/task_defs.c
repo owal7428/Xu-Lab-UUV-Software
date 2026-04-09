@@ -33,6 +33,11 @@ float sin_a[SERVO_ARRAY_SIZE];
  */
 void LED_Task(void* argument)
 {
+	for (int i=0; i<8; i++)
+	{
+		HAL_GPIO_TogglePin(LED_OUT3_GPIO_Port, LED_OUT3_Pin);
+		osDelay(500);
+	}
 	for (;;)
 	{
 		HAL_GPIO_TogglePin(GPIOC, LED_OUT1_Pin);
@@ -81,8 +86,8 @@ int FindSoP(uint8_t *buf, size_t len)
  */
 bool FindInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
 {
-	uint8_t rx_buffer[RX_BUFFER_SIZE];
-	size_t rx_len = 0;
+	static uint8_t rx_buffer[RX_BUFFER_SIZE];
+	static size_t rx_len = 0;
 
 	// Append new SPI data to rolling buffer
 	if (rx_len + PACKETSIZE <= RX_BUFFER_SIZE)
@@ -188,25 +193,24 @@ void PiCom_Task(void * argument)
 	// TODO: Check which sensors are online for queue receiving
 	// TODO: Report to Raspberry Pi which sensors are offline
 
+	/* clean all communications structures to avoid sending old data */
+	memset(tx, 0, PACKETSIZE);
+	memset(rx, 0, PACKETSIZE);
+	memset(&out, 0, sizeof(OutPacket_t));
+	memset(&in, 0, sizeof(InPacket_t));
+	memset(&thrusterCommand, 0, sizeof(ThrusterCmd_t));
+	for (int i=0; i<8; i++) memset(&servoCommand[i], 0, sizeof(ServoCmd_t));
+
 	for (;;)
 	{
-		/* clean all communications structures to avoid sending old data */
-		memset(tx, 0, PACKETSIZE);
-		memset(rx, 0, PACKETSIZE);
-		memset(&out, 0, sizeof(OutPacket_t));
-		memset(&in, 0, sizeof(InPacket_t));
-		memset(&thrusterCommand, 0, sizeof(ThrusterCmd_t));
-		for (int i=0; i<8; i++) memset(&servoCommand[i], 0, sizeof(ServoCmd_t));
-
 		/* collect new data from all sensor queues into the outgoing packet */
 		out.SoP[0] = 0xAA;
 		out.SoP[1] = 0x55;
-		// TODO: Adjust queue timeouts in case of queues underflowing
-		xQueueReceive(IMUQueue, &out.IMUCom, 1);
-		xQueueReceive(MagQueue, &out.MagCom, 1);
-		xQueueReceive(Bar30Queue, &out.Bar30Com, 1);
-		xQueueReceive(HumidQueue, &out.HumidCom, 1);
-		xQueueReceive(BoardQueue, &out.BoardCom, 1);
+		xQueueReceive(IMUQueue, &out.IMUCom, 0);
+		xQueueReceive(MagQueue, &out.MagCom, 0);
+		xQueueReceive(Bar30Queue, &out.Bar30Com, 0);
+		xQueueReceive(HumidQueue, &out.HumidCom, 0);
+		xQueueReceive(BoardQueue, &out.BoardCom, 0);
 		out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - sizeof(out.CheckSum));
 
 		/* serialize packet struct into bytes */
@@ -219,8 +223,6 @@ void PiCom_Task(void * argument)
 		packet_found = FindInput(rx, &in);
 
 		/* distribute commands */
-		// TODO: Adjust queue timeouts in case of queue overflowing
-		// TODO: Avoid sending duplicate commands to thruster or servos
 		if (packet_found)
 		{
 			if (HandleInput(in, &thrusterCommand, servoCommand))
@@ -260,7 +262,7 @@ uint8_t SPI_ReadReg(uint16_t chip, uint8_t reg)
 	uint8_t tx[2];
 	uint8_t rx[2];
 
-	tx[0] = reg | 0x80;
+	tx[0] = reg | 0xC0;  // 0x80 (read) + 0x40 (auto-increment)
 	tx[1] = 0x00;
 
 	osMutexAcquire(spiMutex, osWaitForever);
@@ -349,15 +351,79 @@ void Mag_Task(void *argument)
 {
 	MagCom_t output = {0};
 	uint32_t raw_x, raw_y, raw_z;
+	uint32_t set_x, set_y, set_z;
+	int32_t field_x, field_y, field_z;
 	uint8_t buffer[7];
+	uint8_t set_buffer[7];
 
-	if (!Mag_Init()) return;
+	if (!Mag_Init())
+	{
+		output.head_x = 666;
+		output.head_y = 666;
+		output.head_z = 666;
+		for (;;)
+		{
+			xQueueSend(MagQueue, &output, 0);
+			osDelay(1);
+		}
+	}
 	osDelay(INITPAUSE);
 
+	uint32_t tim_rst = 10;
+	uint32_t timeout = tim_rst; // ms max
 	for (;;)
 	{
-		SPI_WriteReg(SPI1_CS2_Pin, 0x09,0x01); // initiate measurement
-		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01)); // wait for reading to be ready
+		// 1. SET
+		timeout = tim_rst;
+		SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x08);
+		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01))
+		{
+			osDelay(1);
+			if (--timeout == 0) break;
+		}
+
+		// 2. MEASURE (after SET)
+		timeout = tim_rst;
+		SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x01);
+		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01))
+		{
+			osDelay(1);
+			if (--timeout == 0) break;
+		}
+
+		SPI_Read(SPI1_CS2_Pin, 0x00, set_buffer, 7);
+
+		set_x =
+			((uint32_t)set_buffer[0] << 10) |
+			((uint32_t)set_buffer[1] << 2)  |
+			((set_buffer[6] >> 6) & 0x03);
+		set_y =
+			((uint32_t)set_buffer[2] << 10) |
+			((uint32_t)set_buffer[3] << 2)  |
+			((set_buffer[6] >> 4) & 0x03);
+		set_z =
+			((uint32_t)set_buffer[4] << 10) |
+			((uint32_t)set_buffer[5] << 2)  |
+			((set_buffer[6] >> 2) & 0x03);
+
+		// 3. RESET
+		SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x10);
+		timeout = tim_rst;
+		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01))
+		{
+			osDelay(1);
+			if (--timeout == 0) break;
+		}
+
+		// 4. MEASURE
+		SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x01);
+		timeout = tim_rst;
+		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01))
+		{
+			osDelay(1);
+			if (--timeout == 0) break;
+		}
+
 		SPI_Read(SPI1_CS2_Pin, 0x00, buffer, 7); // read all 7 registers of data (0x00 - 0x06)
 
 		// take 18 bit data
@@ -365,21 +431,23 @@ void Mag_Task(void *argument)
 			((uint32_t)buffer[0] << 10) |
 			((uint32_t)buffer[1] << 2)  |
 			((buffer[6] >> 6) & 0x03);
-
 		raw_y =
 			((uint32_t)buffer[2] << 10) |
 			((uint32_t)buffer[3] << 2)  |
-			((buffer[6] >> 6) & 0x03);
-
+			((buffer[6] >> 4) & 0x03);
 		raw_z =
 			((uint32_t)buffer[4] << 10) |
 			((uint32_t)buffer[5] << 2)  |
-			((buffer[6] >> 6) & 0x03);
+			((buffer[6] >> 2) & 0x03);
+
+		field_x = ((int32_t)set_x - (int32_t)raw_x) / 2;
+		field_y = ((int32_t)set_y - (int32_t)raw_y) / 2;
+		field_z = ((int32_t)set_z - (int32_t)raw_z) / 2;
 
 		// convert to signed gaussian units
-		output.head_x = (raw_x - 131072) / 16384.0f;
-		output.head_y = (raw_y - 131072) / 16384.0f;
-		output.head_z = (raw_z - 131072) / 16384.0f;
+		output.head_x = field_x / 16384.0f;
+		output.head_y = field_y / 16384.0f;
+		output.head_z = field_z / 16384.0f;
 
 		// don't wait if queue is full, avoid old data piling up
 		xQueueSend(MagQueue, &output, 0);

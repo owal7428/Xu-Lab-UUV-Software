@@ -99,17 +99,15 @@ typedef struct
 /*
  *  Struct defenition for assembling communication packet out to the Raspberry Pi
  */
-typedef struct
+typedef struct __attribute__((packed))
 {
 	uint8_t SoP[2]; // header marking start of packet for alignment
-	uint8_t pad0[2]; // already automatically added for memory padding
 	IMUCom_t IMUCom;
 	MagCom_t MagCom;
 	Bar30Com_t Bar30Com;
 	HumidCom_t HumidCom;
 	BoardCom_t BoardCom;
 	uint8_t CheckSum; // for detecting corruption
-	uint8_t pad1; // already automatically added for memory padding
 } OutPacket_t;
 
 
@@ -117,15 +115,13 @@ typedef struct
 /*
  *  Struct defenitions for interpreting communication packets from the Raspberry Pi
  */
-typedef struct
+typedef struct __attribute__((packed))
 {
 	uint8_t SoP[2]; // header marking start of packet for alignment
-	uint8_t pad0[2]; // explicit memory padding
 	char Command[4];
 	float Value;
 	float Thrust;
 	uint8_t CheckSum;
-	uint8_t pad1; // explicit memory padding
 } InPacket_t;
 
 
