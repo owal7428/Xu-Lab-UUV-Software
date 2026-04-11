@@ -33,6 +33,7 @@ extern QueueHandle_t ServoQueue[8];
 
 /* Mutex lock for making sure that SPI1 communication doesn't collide */
 extern osMutexId_t spiMutex;
+extern osMutexId_t initMutex;
 
 /* Arrays to store parameters that ID each servo task to its corresponding servo */
 TIM_HandleTypeDef* tims[2] = {&htim2, &htim3};
@@ -161,6 +162,7 @@ int main(void)
 
 	/* Enforce only one device to communicate over SPI line at a time */
 	spiMutex = osMutexNew(NULL);
+	initMutex = osMutexNew(NULL);
 
 	/* Queue creation */
 	IMUQueue = xQueueCreate(10, sizeof(IMUCom_t));
@@ -172,6 +174,7 @@ int main(void)
 	for(int i = 0; i < 8; i++) { ServoQueue[i] = xQueueCreate(10, sizeof(ServoCmd_t)); }
 
 	/* Create the thread(s) */
+	osDelay(50); // allow power-up time
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
 	picomTaskHandle = osThreadNew(PiCom_Task, NULL, &picomTask_attributes);
 	imuTaskHandle = osThreadNew(IMU_Task, NULL, &imuTask_attributes);

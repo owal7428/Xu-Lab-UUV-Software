@@ -20,6 +20,7 @@ QueueHandle_t ServoQueue[8];
 
 /* Mutex lock for making sure that SPI1 communication doesn't collide */
 osMutexId_t spiMutex;
+osMutexId_t initMutex;
 
 /* Array to store parameters that ID each servo task to its corresponding servo */
 ServoParams_t servoParams[2][4];
@@ -33,7 +34,7 @@ float sin_a[SERVO_ARRAY_SIZE];
  */
 void LED_Task(void* argument)
 {
-	for (int i=0; i<8; i++)
+	for (int i=0; i<(INITPAUSE/500); i++)
 	{
 		HAL_GPIO_TogglePin(LED_OUT3_GPIO_Port, LED_OUT3_Pin);
 		osDelay(500);
@@ -237,46 +238,6 @@ void PiCom_Task(void * argument)
 
 
 /*
- *  Helper function to write to a specific register on a specific SPI line and on a specific chip select
- */
-void SPI_WriteReg(uint16_t chip, uint8_t reg, uint8_t data)
-{
-	uint8_t tx[2];
-	tx[0] = reg & 0x7F;   // write mode
-	tx[1] = data;
-
-	osMutexAcquire(spiMutex, osWaitForever);
-	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_RESET);
-
-	HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
-
-	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_SET);
-	osMutexRelease(spiMutex);
-}
-
-/*
- *  Helper function to read from a specific register on a specific SPI line and on a specific chip select
- */
-uint8_t SPI_ReadReg(uint16_t chip, uint8_t reg)
-{
-	uint8_t tx[2];
-	uint8_t rx[2];
-
-	tx[0] = reg | 0xC0;  // 0x80 (read) + 0x40 (auto-increment)
-	tx[1] = 0x00;
-
-	osMutexAcquire(spiMutex, osWaitForever);
-	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_RESET);
-
-	HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
-
-	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_SET);
-	osMutexRelease(spiMutex);
-
-	return rx[1];
-}
-
-/*
  *  Helper function to read multiple bytes of data from a specific SPI line on a specific chip select
  */
 void SPI_Read(uint16_t chip, uint8_t reg, uint8_t* buffer, uint8_t length)
@@ -288,11 +249,11 @@ void SPI_Read(uint16_t chip, uint8_t reg, uint8_t* buffer, uint8_t length)
 	memset(&tx[1], 0, length);
 
 	osMutexAcquire(spiMutex, osWaitForever);
+
 	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_RESET);
-
 	HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 1, HAL_MAX_DELAY);
-
 	HAL_GPIO_WritePin(GPIOC, chip, GPIO_PIN_SET);
+
 	osMutexRelease(spiMutex);
 
 	memcpy(buffer, &rx[1], length);
@@ -301,11 +262,88 @@ void SPI_Read(uint16_t chip, uint8_t reg, uint8_t* buffer, uint8_t length)
 
 
 /*
+ *  Helper function to write to a specific register on a Magnetometer SPI line
+ */
+void IMU_WriteReg(uint8_t reg, uint16_t data)
+{
+	uint8_t tx[3];
+	tx[0] = reg & 0x7F;   // write mode
+	tx[1] = data & 0xFF;
+	tx[2] = (data >> 8) & 0xFF;
+
+	osMutexAcquire(spiMutex, osWaitForever);
+
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS1_Pin, GPIO_PIN_RESET);
+	HAL_SPI_Transmit(&hspi1, tx, 3, HAL_MAX_DELAY);
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS1_Pin, GPIO_PIN_SET);
+
+	osMutexRelease(spiMutex);
+}
+
+/*
+ *  Helper function to read from a specific register on a Magnetometer SPI line
+ */
+uint16_t IMU_ReadReg(uint8_t reg)
+{
+    uint8_t tx[3] = {reg | 0x80, 0x00, 0x00};
+    uint8_t rx[3] = {0};
+
+    osMutexAcquire(spiMutex, osWaitForever);
+
+    HAL_GPIO_WritePin(GPIOC, SPI1_CS1_Pin, GPIO_PIN_RESET);
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 3, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOC, SPI1_CS1_Pin, GPIO_PIN_SET);
+
+    osMutexRelease(spiMutex);
+
+    return (uint16_t)((rx[1] << 8) | rx[2]);  // big-endian, LSB first
+}
+
+/*
  *  Initialize the settings of the IMU to prepare for active reading
  */
-bool IMU_Init(void)
+int8_t IMU_Init(void)
 {
-	return false;
+    uint8_t id, err;
+
+    // Step 1: dummy read to switch from I3C/I2C to SPI mode
+    IMU_ReadReg(0x00);
+    osDelay(10);  // give interface time to settle
+
+    // Step 2: verify chip ID
+    id = IMU_ReadReg(0x00);
+    if (id != 0x0048) return -1;
+
+    // Step 3: check power status (ERR_REG bit[0] must be 0)
+    err = IMU_ReadReg(0x01);
+    if (err & 0x0001) return -2;  // fatal_err set
+
+    // Step 4: configure — now safe to write
+    IMU_WriteReg(0x20, 0x4029);  // ACC_CONF: normal, ±8g, 200Hz
+    IMU_WriteReg(0x21, 0x4049);  // GYR_CONF: normal, ±2000dps, 200Hz
+
+    osDelay(5);  // wait for sensor startup after mode change
+
+    return true;
+}
+
+void IMU_Read(uint8_t reg, uint8_t* buffer, uint8_t length)
+{
+    uint8_t tx[length + 2];  // 1 address + 1 dummy + length data
+    uint8_t rx[length + 2];
+
+    tx[0] = reg | 0x80;
+    memset(&tx[1], 0, length + 1);
+
+    osMutexAcquire(spiMutex, osWaitForever);
+
+    HAL_GPIO_WritePin(GPIOC, SPI1_CS1_Pin, GPIO_PIN_RESET);
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, length + 2, HAL_MAX_DELAY);
+    HAL_GPIO_WritePin(GPIOC, SPI1_CS1_Pin, GPIO_PIN_SET);
+
+    osMutexRelease(spiMutex);
+
+    memcpy(buffer, &rx[2], length);  // skip address echo AND dummy byte
 }
 
 /*
@@ -315,15 +353,46 @@ bool IMU_Init(void)
 void IMU_Task(void *argument)
 {
 	IMUCom_t output = {0};
-	output.acc_x = 1.0;
-	output.acc_y = 2.0;
-	output.acc_z = 3.0;
-	output.gyro_x = 4.0;
-	output.gyro_y = 5.0;
-	output.gyro_z = 6.0;
+	int16_t raw_ax, raw_ay, raw_az;
+	int16_t raw_gx, raw_gy, raw_gz;
+	uint8_t buffer[12];
+
+	int8_t err = IMU_Init();
+	if (err < 0)
+	{
+		output.acc_x = err;
+		output.acc_y = err;
+		output.acc_z = err;
+		output.gyro_x = err;
+		output.gyro_y = err;
+		output.gyro_z = err;
+
+		for (;;)
+		{
+			xQueueSend(IMUQueue, &output, 0);
+			osDelay(1);
+		}
+	}
+	osDelay(INITPAUSE);
 
 	for (;;)
 	{
+		IMU_Read(0x03, buffer, 12);
+
+		raw_ax = (int16_t)((uint16_t)buffer[1] << 8 | buffer[0]);  // LSB first
+		raw_ay = (int16_t)((uint16_t)buffer[3] << 8 | buffer[2]);
+		raw_az = (int16_t)((uint16_t)buffer[5] << 8 | buffer[4]);
+		raw_gx = (int16_t)((uint16_t)buffer[7] << 8 | buffer[6]);
+		raw_gy = (int16_t)((uint16_t)buffer[9] << 8 | buffer[8]);
+		raw_gz = (int16_t)((uint16_t)buffer[11] << 8 | buffer[10]);
+
+		output.acc_x  = (float)raw_ax / 4096.0f;   // result in g
+		output.acc_y  = (float)raw_ay / 4096.0f;
+		output.acc_z  = (float)raw_az / 4096.0f;
+		output.gyro_x = (float)raw_gx / 16.384f;   // result in °/s
+		output.gyro_y = (float)raw_gy / 16.384f;
+		output.gyro_z = (float)raw_gz / 16.384f;
+
 		xQueueSend(IMUQueue, &output, 1);
 		osDelay(1);
 	}
@@ -332,15 +401,55 @@ void IMU_Task(void *argument)
 
 
 /*
+ *  Helper function to write to a specific register on a Magnetometer SPI line
+ */
+void MAG_WriteReg(uint8_t reg, uint8_t data)
+{
+	uint8_t tx[2];
+	tx[0] = reg & 0x7F;   // write mode
+	tx[1] = data;
+
+	osMutexAcquire(spiMutex, osWaitForever);
+
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS2_Pin, GPIO_PIN_RESET);
+	HAL_SPI_Transmit(&hspi1, tx, 2, HAL_MAX_DELAY);
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS2_Pin, GPIO_PIN_SET);
+
+	osMutexRelease(spiMutex);
+}
+
+/*
+ *  Helper function to read from a specific register on a Magnetometer SPI line
+ */
+uint8_t MAG_ReadReg(uint8_t reg)
+{
+	uint8_t tx[2];
+	uint8_t rx[2];
+
+	tx[0] = reg | 0xC0;  // 0x80 (read) + 0x40 (auto-increment)
+	tx[1] = 0x00;
+
+	osMutexAcquire(spiMutex, osWaitForever);
+
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS2_Pin, GPIO_PIN_RESET);
+	HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, HAL_MAX_DELAY);
+	HAL_GPIO_WritePin(GPIOC, SPI1_CS2_Pin, GPIO_PIN_SET);
+
+	osMutexRelease(spiMutex);
+
+	return rx[1];
+}
+
+/*
  *  Initialize the settings of the Magnetometer to prepare for active reading
  *  	who_am_i = 0x30
  */
 bool Mag_Init(void)
 {
-	SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x10); // set magnetometer
+	MAG_WriteReg(0x09, 0x10); // set magnetometer
 	osDelay(5);
-	SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x20); // set automatic set/reset
-	return (SPI_ReadReg(SPI1_CS2_Pin, 0x2F) == 0x30); // return ID check to return online/offline
+	MAG_WriteReg(0x09, 0x20); // set automatic set/reset
+	return (MAG_ReadReg(0x2F) == 0x30); // return ID check to return online/offline
 }
 
 /*
@@ -375,8 +484,8 @@ void Mag_Task(void *argument)
 	{
 		// 1. SET
 		timeout = tim_rst;
-		SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x08);
-		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01))
+		MAG_WriteReg(0x09, 0x08);
+		while (!(MAG_ReadReg(0x08) & 0x01))
 		{
 			osDelay(1);
 			if (--timeout == 0) break;
@@ -384,8 +493,8 @@ void Mag_Task(void *argument)
 
 		// 2. MEASURE (after SET)
 		timeout = tim_rst;
-		SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x01);
-		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01))
+		MAG_WriteReg(0x09, 0x01);
+		while (!(MAG_ReadReg(0x08) & 0x01))
 		{
 			osDelay(1);
 			if (--timeout == 0) break;
@@ -407,18 +516,18 @@ void Mag_Task(void *argument)
 			((set_buffer[6] >> 2) & 0x03);
 
 		// 3. RESET
-		SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x10);
+		MAG_WriteReg(0x09, 0x10);
 		timeout = tim_rst;
-		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01))
+		while (!(MAG_ReadReg(0x08) & 0x01))
 		{
 			osDelay(1);
 			if (--timeout == 0) break;
 		}
 
 		// 4. MEASURE
-		SPI_WriteReg(SPI1_CS2_Pin, 0x09, 0x01);
+		MAG_WriteReg(0x09, 0x01);
 		timeout = tim_rst;
-		while (!(SPI_ReadReg(SPI1_CS2_Pin, 0x08) & 0x01))
+		while (!(MAG_ReadReg(0x08) & 0x01))
 		{
 			osDelay(1);
 			if (--timeout == 0) break;
