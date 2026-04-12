@@ -592,11 +592,63 @@ void Bar30_Task(void* argument)
 
 
 /*
+ *  Send a 16-bit command to the SHTC3 (MSB first)
+ */
+bool Humid_SendCmd(uint16_t cmd)
+{
+    uint8_t buffer[2] = { cmd >> 8, cmd & 0xFF };
+    return HAL_I2C_Master_Transmit(&hi2c1, SHTC3ADDR, buffer, 2, HAL_MAX_DELAY) == HAL_OK;
+}
+
+/*
+ *  CRC-8 verification:
+ *    Polynomial 0x31, init 0xFF, no reflection, no final XOR
+ */
+uint8_t Humid_CRC8(const uint8_t *data, size_t len)
+{
+    uint8_t crc = 0xFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x80) ? (crc << 1) ^ 0x31 : (crc << 1);
+    }
+    return crc;
+}
+
+/*
  *  Initialize the settings of the Humidity sensor to prepare for active reading
  */
 bool Humid_Init(void)
 {
-	return false;
+    uint8_t cmd[2] = { 0xEF, 0xC8 };   // Read ID register (Table 14)
+    uint8_t resp[3];                    // 16-bit ID + 8-bit CRC
+
+    // Wake the sensor before any communication (Section 5.2)
+    if (!Humid_SendCmd(0x3517))
+        return false;
+    osDelay(1);
+
+    // Send read-ID command (write phase)
+    if (HAL_I2C_Master_Transmit(&hi2c1, SHTC3ADDR, cmd, 2, HAL_MAX_DELAY) != HAL_OK)
+        return false;
+
+    // Read 2-byte ID + 1-byte CRC (read phase)
+    if (HAL_I2C_Master_Receive(&hi2c1, SHTC3ADDR, resp, 3, HAL_MAX_DELAY) != HAL_OK)
+        return false;
+
+    // Validate CRC over the two ID bytes
+    if (Humid_CRC8(resp, 2) != resp[2])
+        return false;
+
+    // Check SHTC3-specific bits: bit11=1, bits5:0=0b000111 (Table 15)
+    uint16_t id = ((uint16_t)resp[0] << 8) | resp[1];
+    if ((id & 0x083F) != 0x0807)
+        return false;
+
+    // Put sensor to sleep after init (Section 5.2)
+    Humid_SendCmd(0xB098);
+
+    return true;
 }
 
 /*
@@ -604,17 +656,60 @@ bool Humid_Init(void)
  */
 void Humid_Task(void *argument)
 {
-	HumidCom_t output = {0};
-	output.humidity = 1.0;
-	output.air_temp = 2.0;
+    HumidCom_t output = {0};
+    uint8_t rx[6];
 
-	for (;;)
-	{
-		xQueueSend(HumidQueue, &output, portMAX_DELAY);
-		osDelay(1);
-	}
+    if (!Humid_Init())
+    {
+        output.air_temp = 666;
+        output.humidity = 666;
+        for (;;)
+        {
+            xQueueSend(HumidQueue, &output, portMAX_DELAY);
+            osDelay(1000);
+        }
+    }
+
+    for (;;)
+    {
+        bool ok = false;
+
+        // 1. Wakeup
+        if (!Humid_SendCmd(0x3517)) goto sleep_retry;
+        osDelay(1);
+
+        // 2. Trigger measurement (RH first, clock stretching disabled, normal mode)
+        if (!Humid_SendCmd(0x58E0)) goto sleep_retry;
+        osDelay(13);    // datasheet Table 5: max 12.1ms in normal mode, use 13ms margin
+
+        // 3. Read 6 bytes: RH_MSB RH_LSB RH_CRC T_MSB T_LSB T_CRC
+        if (HAL_I2C_Master_Receive(&hi2c1, SHTC3ADDR, rx, 6, HAL_MAX_DELAY) != HAL_OK)
+            goto sleep_retry;
+
+        // 4. Validate both CRCs (Section 5.10)
+        if (Humid_CRC8(&rx[0], 2) != rx[2]) goto sleep_retry;
+        if (Humid_CRC8(&rx[3], 2) != rx[5]) goto sleep_retry;
+
+        // 5. Convert raw values (Section 5.11) — declared BEFORE the goto target
+        {
+            uint16_t raw_rh = ((uint16_t)rx[0] << 8) | rx[1];
+            uint16_t raw_t  = ((uint16_t)rx[3] << 8) | rx[4];
+
+            output.humidity = 100.0f  * ((float)raw_rh / 65536.0f);
+            output.air_temp = -45.0f  + 175.0f * ((float)raw_t / 65536.0f);
+        }
+
+        ok = true;
+        xQueueSend(HumidQueue, &output, portMAX_DELAY);
+
+sleep_retry:
+        // Always send sleep command to minimise current draw (Table 3: ~0.3µA vs ~45µA idle)
+        Humid_SendCmd(0xB098);
+
+        // Only delay 1s on success; on failure, retry sooner
+        osDelay(ok ? 1000 : 100);
+    }
 }
-
 
 
 /*
@@ -622,7 +717,28 @@ void Humid_Task(void *argument)
  */
 bool Board_Init(void)
 {
-	return false;
+	uint32_t raw;
+
+	// Run one conversion and check the ADC responds at all
+	if (HAL_ADC_Start(&hadc1) != HAL_OK)
+		return false;
+
+	if (HAL_ADC_PollForConversion(&hadc1, 10) != HAL_OK)
+	{
+		HAL_ADC_Stop(&hadc1);
+		return false;
+	}
+
+	raw = HAL_ADC_GetValue(&hadc1);
+	HAL_ADC_Stop(&hadc1);
+
+	// Sanity-check: MCP9700A output range is 100 mV to 1.75V over -40 to +125°C
+	// In 12-bit ADC counts at 3.3V ref, that's roughly 124 to 2172.
+	// A reading of 0 or full-scale (4095) suggests a wiring fault.
+	if (raw == 0 || raw >= 4095)
+		return false;
+
+	return true;
 }
 
 /*
@@ -631,10 +747,27 @@ bool Board_Init(void)
 void Board_Task(void *argument)
 {
 	BoardCom_t output = {0};
-	output.board_temp = 1.0;
+
+	if (!Board_Init())
+	{
+		output.board_temp = 666.0f;
+		for (;;)
+		{
+			xQueueSend(BoardQueue, &output, portMAX_DELAY);
+			osDelay(1);
+		}
+	}
 
 	for (;;)
 	{
+		if (HAL_ADC_Start(&hadc1) == HAL_OK && HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+		{
+			uint32_t raw  = HAL_ADC_GetValue(&hadc1);
+			float    vout = ((float)raw / 4096.0) * 3.3;
+			output.board_temp = (vout - 0.5) / 0.01;
+		}
+		HAL_ADC_Stop(&hadc1);
+
 		xQueueSend(BoardQueue, &output, portMAX_DELAY);
 		osDelay(1);
 	}
