@@ -2,9 +2,11 @@
 
 import spidev
 import ctypes
+import time
 
 spi = spidev.SpiDev()
 spi.open(0,0)
+#spi.max_speed_hz = 750000
 spi.max_speed_hz = 10000
 spi.mode = 0
 
@@ -67,36 +69,33 @@ class InPacket(ctypes.Structure):
     _pack_ = 1
     _fields_ = [
         ("SoP", ctypes.c_uint8*2),
-        ("pad0", ctypes.c_uint8*2), # mimic STM32 padding
         ("IMUCom", IMUCom_t),
         ("MagCom", MagCom_t),
         ("Bar30Com", Bar30Com_t),
         ("HumidCom", HumidCom_t),
         ("BoardCom", BoardCom_t),
         ("CheckSum", ctypes.c_uint8),
-        ("pad1", ctypes.c_uint8), # bring size to 64 bytes total
     ]
 
 class OutPacket(ctypes.Structure):
+    _pack_ = 1
     _fields_ = [
         ("SoP", ctypes.c_uint8*2),
-        ("pad0", ctypes.c_uint8*2), # mimic STM32 padding
         ("Command", ctypes.c_char*4),
         ("Value", ctypes.c_float),
         ("Thrust", ctypes.c_float),
         ("CheckSum", ctypes.c_uint8),
-        ("pad1", ctypes.c_uint8),
     ]
 
 
 out = OutPacket()
 
 # Fill in dummy commands
+out.Command = b"fwd"
+out.Value = 80
+out.Thrust = 50
 out.SoP[0] = 0xAA
 out.SoP[1] = 0x55
-out.Command = "fwd"
-out.Value = 1.0
-out.Thrust = 100
 out.CheckSum = CalculateChecksum(bytearray(out))
 
 packet_bytes = ctypes.string_at(ctypes.byref(out), ctypes.sizeof(out))
@@ -111,44 +110,53 @@ tx[:size] = packet_bytes
 rx = bytearray(128)
 packet_len = ctypes.sizeof(InPacket)
 
-while (1):
-    rx.extend(spi.xfer2(tx))
-    while (len(rx) >= PACKETSIZE):
-        if (rx[0] == 0xAA and rx[1] == 0x55):
-            packet_bytes = rx[:PACKETSIZE]
-            packet = InPacket.from_buffer_copy(packet_bytes)
+start = time.time()
+NP = 0
+try:
+    while (1):
+        rx.extend(spi.xfer2(tx))
+        while (len(rx) >= packet_len):
+            if (rx[0] == 0xAA and rx[1] == 0x55):
+                packet_bytes = rx[:packet_len]
+                packet = InPacket.from_buffer_copy(packet_bytes)
 
-            checksum_bytes = ctypes.string_at(ctypes.byref(packet), packet_len - 1)
-            cs = CalculateChecksum(checksum_bytes)
-            if (cs != packet.CheckSum):
-                print(f"ERROR: CheckSum failed | got {packet.CheckSum}, calculated {cs}\n")
-            else:
-                print(f"CheckSum OK: {cs}")
-                print(f"    IMU:")
-                print(f"        acc_x: {packet.IMUCom.acc_x}")
-                print(f"        acc_y: {packet.IMUCom.acc_y}")
-                print(f"        acc_z: {packet.IMUCom.acc_z}")
-                print(f"        gyro_x: {packet.IMUCom.gyro_x}")
-                print(f"        gyro_y: {packet.IMUCom.gyro_y}")
-                print(f"        gyro_z: {packet.IMUCom.gyro_z}")
-                print(f"    Magnetometer:")
-                print(f"        head_x: {packet.MagCom.head_x}")
-                print(f"        head_y: {packet.MagCom.head_y}")
-                print(f"        head_z: {packet.MagCom.head_z}")
-                print(f"    Bar30:")
-                print(f"        pressure: {packet.Bar30Com.pressure}")
-                print(f"        water_temp: {packet.Bar30Com.water_temp}")
-                print(f"    Humidity:")
-                print(f"        humidity: {packet.HumidCom.humidity}")
-                print(f"        air_temp: {packet.HumidCom.air_temp}")
-                print(f"    Board Temp:")
-                print(f"        board_temp: {packet.BoardCom.board_temp}")
-                print(f"    Check Sum:")
-                print(f"        sum: {packet.CheckSum}\n")
+                checksum_bytes = ctypes.string_at(ctypes.byref(packet), packet_len)
+                cs = CalculateChecksum(checksum_bytes)
+                if (cs != packet.CheckSum):
+                    rx.pop(0)
+                    continue
+                    #print(f"ERROR: CheckSum failed | got {packet.CheckSum}, calculated {cs}\n")
+                else:
+                    NP += 1
+                    print(f"CheckSum OK: {cs}")
+                    print(f"    IMU:")
+                    print(f"        acc_x: {packet.IMUCom.acc_x}")
+                    print(f"        acc_y: {packet.IMUCom.acc_y}")
+                    print(f"        acc_z: {packet.IMUCom.acc_z}")
+                    print(f"        gyro_x: {packet.IMUCom.gyro_x}")
+                    print(f"        gyro_y: {packet.IMUCom.gyro_y}")
+                    print(f"        gyro_z: {packet.IMUCom.gyro_z}")
+                    print(f"    Magnetometer:")
+                    print(f"        head_x: {packet.MagCom.head_x}")
+                    print(f"        head_y: {packet.MagCom.head_y}")
+                    print(f"        head_z: {packet.MagCom.head_z}")
+                    print(f"    Bar30:")
+                    print(f"        pressure: {packet.Bar30Com.pressure}")
+                    print(f"        water_temp: {packet.Bar30Com.water_temp}")
+                    print(f"    Humidity:")
+                    print(f"        humidity: {packet.HumidCom.humidity}")
+                    print(f"        air_temp: {packet.HumidCom.air_temp}")
+                    print(f"    Board Temp:")
+                    print(f"        board_temp: {packet.BoardCom.board_temp}")
+                    print(f"    Check Sum:")
+                    print(f"        sum: {packet.CheckSum}\n")
                 
-                rx = rx[PACKETSIZE:]
-        else:
-            rx.pop(0)
+                    rx = rx[packet_len:]
+            else:
+                rx.pop(0)
+except KeyboardInterrupt:
+    end = time.time()
+    print(f"\nAverage Packets per Second: {NP/(end-start)}\n")
 
 spi.close()
 
