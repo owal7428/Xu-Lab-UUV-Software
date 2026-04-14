@@ -66,7 +66,7 @@ const osThreadAttr_t magTask_attributes = {
 osThreadId_t bar30TaskHandle;
 const osThreadAttr_t bar30Task_attributes = {
 	.name = "Bar30_Task",
-	.stack_size = 128 * 4,  // stack in bytes
+	.stack_size = 512 * 4,  // stack in bytes
 	.priority = (osPriority_t) osPriorityNormal,
 };
 
