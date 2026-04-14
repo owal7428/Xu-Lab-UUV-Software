@@ -21,11 +21,14 @@ QueueHandle_t ServoQueue[8];
 /* Mutex lock for making sure that SPI1 communication doesn't collide */
 osMutexId_t spiMutex;
 osMutexId_t initMutex;
+osMutexId_t i2cMutex;
 
 /* Array to store parameters that ID each servo task to its corresponding servo */
 ServoParams_t servoParams[2][4];
 /* Array to store pre-calculated sin wave */
 float sin_a[SERVO_ARRAY_SIZE];
+/* Calibration coefficients read from PROM — persist across task cycles */
+static uint16_t bar30_prom[7];
 
 
 
@@ -565,28 +568,221 @@ void Mag_Task(void *argument)
 
 
 
-/*
- *  Initialize the settings of the Bar30 Pressure/Temp sensor to prepare for active reading
- */
-bool Bar30_Init(void)
+static bool Bar30_SendCmd(uint8_t cmd)
 {
-	return false;
+	osMutexAcquire(i2cMutex, osWaitForever);
+	bool ok = HAL_I2C_Master_Transmit(&hi2c1, BAR30ADDR, &cmd, 1, 50) == HAL_OK;
+	osMutexRelease(i2cMutex);
+	return ok;
 }
 
 /*
- *  Task definition for continuous reading from Bar30 Pressure/Temp Sensor
+ *  CRC-4 check, exactly as given in the datasheet (Figure 10 C code example)
  */
-void Bar30_Task(void* argument)
+static uint8_t Bar30_CRC4(uint16_t prom[])
 {
-	Bar30Com_t output = {0};
-	output.pressure = 1.0;
-	output.water_temp = 2.0;
+    uint16_t work[8];
+    for (int i = 0; i < 7; i++) work[i] = prom[i];
+    work[7] = 0;
 
-	for (;;)
-	{
-		xQueueSend(Bar30Queue, &output, portMAX_DELAY);
-		osDelay(1);
-	}
+    uint16_t rem = 0;
+    work[0] = work[0] & 0x0FFF;   // zero out CRC nibble
+
+    for (int cnt = 0; cnt < 16; cnt++)
+    {
+        if (cnt % 2 == 1) rem ^= (work[cnt >> 1] & 0x00FF);
+        else              rem ^= (work[cnt >> 1] >> 8);
+
+        for (int n_bit = 8; n_bit > 0; n_bit--)
+            rem = (rem & 0x8000) ? (rem << 1) ^ 0x3000 : (rem << 1);
+    }
+    return (rem >> 12) & 0x000F;
+}
+
+/*
+ *  Read a 16-bit PROM word at address 0..6
+ */
+bool Bar30_ReadProm(uint8_t addr, uint16_t *out)
+{
+    uint8_t cmd = 0xA0 | (addr << 1);
+    uint8_t buffer[2];
+
+    osMutexAcquire(i2cMutex, osWaitForever);
+    bool tx_ok = HAL_I2C_Master_Transmit(&hi2c1, BAR30ADDR, &cmd, 1, 50) == HAL_OK;
+    osMutexRelease(i2cMutex);
+    if (!tx_ok) return false;
+
+    osMutexAcquire(i2cMutex, osWaitForever);
+    bool rx_ok = HAL_I2C_Master_Receive(&hi2c1, BAR30ADDR, buffer, 2, 50) == HAL_OK;
+    osMutexRelease(i2cMutex);
+    if (!rx_ok) return false;
+
+    *out = ((uint16_t)buffer[0] << 8) | buffer[1];
+    return true;
+}
+
+/*
+ *  Trigger a conversion and read back the 24-bit ADC result.
+ *  The datasheet is explicit: do NOT read ADC during conversion — result
+ *  will be 0 and the conversion is NOT stopped (Conversion Sequence section).
+ */
+bool Bar30_ReadAdc(uint8_t conv_cmd, uint32_t *out)
+{
+    uint8_t read_cmd = 0x00;
+    uint8_t buffer[3];
+
+    // Send conversion command then release — other tasks can use I2C during wait
+    osMutexAcquire(i2cMutex, osWaitForever);
+    bool cmd_ok = HAL_I2C_Master_Transmit(&hi2c1, BAR30ADDR, &conv_cmd, 1, 50) == HAL_OK;
+    osMutexRelease(i2cMutex);
+    if (!cmd_ok) return false;
+
+    osDelay(10);   // conversion wait — bus is free here
+
+    osMutexAcquire(i2cMutex, osWaitForever);
+    bool tx_ok = HAL_I2C_Master_Transmit(&hi2c1, BAR30ADDR, &read_cmd, 1, 50) == HAL_OK;
+    osMutexRelease(i2cMutex);
+    if (!tx_ok) return false;
+
+    osMutexAcquire(i2cMutex, osWaitForever);
+    bool rx_ok = HAL_I2C_Master_Receive(&hi2c1, BAR30ADDR, buffer, 3, 50) == HAL_OK;
+    osMutexRelease(i2cMutex);
+    if (!rx_ok) return false;
+
+    *out = ((uint32_t)buffer[0] << 16) |
+           ((uint32_t)buffer[1] <<  8) |
+            (uint32_t)buffer[2];
+    return true;
+}
+
+/*
+ *  Reset the sensor, read and CRC-validate the 6 PROM calibration
+ *  coefficients (C1..C6). Must succeed before any measurement is valid.
+ *  (Factory Calibration + PROM Read Sequence sections)
+ */
+bool Bar30_Init(void)
+{
+    // Reset loads calibration PROM into internal registers (Reset Sequence)
+    if (!Bar30_SendCmd(0x1E)) return false;
+    osDelay(10);   // allow reset + PROM reload to complete
+
+    // Read all 7 PROM words
+    for (uint8_t i = 0; i <= 6; i++)
+    {
+        if (!Bar30_ReadProm(i, &bar30_prom[i]))
+            return false;
+    }
+
+    // Validate CRC-4 in bits [15:12] of W0 (Figure 10, CRC section)
+    uint8_t crc_read      = (bar30_prom[0] >> 12) & 0x0F;
+    uint8_t crc_calculated = Bar30_CRC4(bar30_prom);
+    if (crc_read != crc_calculated)
+        return false;
+
+    return true;
+}
+
+/*
+ *  Read D1 (pressure) and D2 (temperature), apply full second-order
+ *  compensation per Figure 9 (first order) and Figure 10 (second order).
+ *
+ *  Output pressure in mbar, temperature in °C.
+ *
+ *  Key datasheet intermediate types (Figure 9):
+ *    dT, TEMP          → signed int32
+ *    OFF, SENS         → signed int64  (intermediate products exceed 32-bit)
+ *    P                 → signed int32
+ */
+void Bar30_Task(void *argument)
+{
+    Bar30Com_t output = {0};
+
+    if (!Bar30_Init())
+    {
+        output.pressure   = 666.0f;
+        output.water_temp = 666.0f;
+        for (;;)
+        {
+            xQueueSend(Bar30Queue, &output, portMAX_DELAY);
+            osDelay(1);
+        }
+    }
+
+    osDelay(INITPAUSE);
+
+    for (;;)
+    {
+        uint32_t D1 = 0, D2 = 0;
+
+        if (!Bar30_ReadAdc(0x48, &D1)) goto retry;
+        if (!Bar30_ReadAdc(0x58, &D2)) goto retry;
+
+        {
+            // Unpack calibration coefficients (Figure 9 notation)
+            uint16_t C1 = bar30_prom[1];   // Pressure sensitivity
+            uint16_t C2 = bar30_prom[2];   // Pressure offset
+            uint16_t C3 = bar30_prom[3];   // Temp. coeff. of pressure sensitivity
+            uint16_t C4 = bar30_prom[4];   // Temp. coeff. of pressure offset
+            uint16_t C5 = bar30_prom[5];   // Reference temperature
+            uint16_t C6 = bar30_prom[6];   // Temp. coeff. of temperature
+
+            // ── First-order compensation (Figure 9) ──────────────────────
+            // dT = D2 - C5 * 2^8
+            int32_t  dT   = (int32_t)D2 - ((int32_t)C5 << 8);
+
+            // TEMP = 2000 + dT * C6 / 2^23   (units: 0.01°C)
+            int32_t  TEMP = 2000 + (int32_t)(((int64_t)dT * C6) >> 23);
+
+            // OFF  = C2 * 2^16 + (C4 * dT) / 2^7
+            int64_t  OFF  = ((int64_t)C2 << 16) + (((int64_t)C4 * dT) >> 7);
+
+            // SENS = C1 * 2^15 + (C3 * dT) / 2^8
+            int64_t  SENS = ((int64_t)C1 << 15) + (((int64_t)C3 * dT) >> 8);
+
+            // ── Second-order compensation (Figure 10) ─────────────────────
+            int32_t Ti    = 0;
+            int64_t OFFi  = 0;
+            int64_t SENSi = 0;
+
+            if (TEMP < 2000)
+            {
+                // Low temperature (< 20°C)
+                Ti    = (int32_t)(3 * ((int64_t)dT * dT) >> 33);
+                OFFi  = 1  * (int64_t)(TEMP - 2000) * (TEMP - 2000) >> 4;
+                SENSi = 5  * (int64_t)(TEMP - 2000) * (TEMP - 2000) >> 3;
+
+                if (TEMP < -1500)
+                {
+                    // Very low temperature (< -15°C)
+                    OFFi  += 7  * (int64_t)(TEMP + 1500) * (TEMP + 1500);
+                    SENSi += 4  * (int64_t)(TEMP + 1500) * (TEMP + 1500);
+                }
+            }
+            else
+            {
+                // High temperature (>= 20°C)
+                Ti    = (int32_t)(2 * ((int64_t)dT * dT) >> 37);
+                OFFi  = (int64_t)(TEMP - 2000) * (TEMP - 2000) >> 4;
+                SENSi = 0;
+            }
+
+            int64_t OFF2  = OFF  - OFFi;
+            int64_t SENS2 = SENS - SENSi;
+            int32_t TEMP2 = TEMP - Ti;
+
+            // P2 = (D1 * SENS2 / 2^21 - OFF2) / 2^13   (units: 0.1 mbar per datasheet Fig 10)
+            // Divide by 10 to get mbar
+            int32_t P2 = (int32_t)((((int64_t)D1 * SENS2 >> 21) - OFF2) >> 13);
+
+            output.water_temp = (float)TEMP2 / 100.0f;   // 0.01°C units → °C
+            output.pressure   = (float)P2    / 10.0f;    // 0.1 mbar units → mbar
+        }
+
+        xQueueSend(Bar30Queue, &output, portMAX_DELAY);
+
+retry:
+        osDelay(100);
+    }
 }
 
 
@@ -596,8 +792,11 @@ void Bar30_Task(void* argument)
  */
 bool Humid_SendCmd(uint16_t cmd)
 {
-    uint8_t buffer[2] = { cmd >> 8, cmd & 0xFF };
-    return HAL_I2C_Master_Transmit(&hi2c1, SHTC3ADDR, buffer, 2, HAL_MAX_DELAY) == HAL_OK;
+	uint8_t buffer[2] = { cmd >> 8, cmd & 0xFF };
+	osMutexAcquire(i2cMutex, osWaitForever);
+	bool ok = HAL_I2C_Master_Transmit(&hi2c1, SHTC3ADDR, buffer, 2, 50) == HAL_OK;
+	osMutexRelease(i2cMutex);
+	return ok;
 }
 
 /*
@@ -620,36 +819,31 @@ uint8_t Humid_CRC8(const uint8_t *data, size_t len)
  */
 bool Humid_Init(void)
 {
-    uint8_t cmd[2] = { 0xEF, 0xC8 };   // Read ID register (Table 14)
-    uint8_t resp[3];                    // 16-bit ID + 8-bit CRC
+    uint8_t cmd[2] = { 0xEF, 0xC8 };
+    uint8_t resp[3];
 
-    // Wake the sensor before any communication (Section 5.2)
-    if (!Humid_SendCmd(0x3517))
-        return false;
+    if (!Humid_SendCmd(0x3517)) return false;  // already wrapped above
     osDelay(1);
 
-    // Send read-ID command (write phase)
-    if (HAL_I2C_Master_Transmit(&hi2c1, SHTC3ADDR, cmd, 2, HAL_MAX_DELAY) != HAL_OK)
-        return false;
+    osMutexAcquire(i2cMutex, osWaitForever);
+    bool tx_ok = HAL_I2C_Master_Transmit(&hi2c1, SHTC3ADDR, cmd, 2, 50) == HAL_OK;
+    osMutexRelease(i2cMutex);
+    if (!tx_ok) return false;
 
-    // Read 2-byte ID + 1-byte CRC (read phase)
-    if (HAL_I2C_Master_Receive(&hi2c1, SHTC3ADDR, resp, 3, HAL_MAX_DELAY) != HAL_OK)
-        return false;
+    osMutexAcquire(i2cMutex, osWaitForever);
+    bool rx_ok = HAL_I2C_Master_Receive(&hi2c1, SHTC3ADDR, resp, 3, 50) == HAL_OK;
+    osMutexRelease(i2cMutex);
+    if (!rx_ok) return false;
 
-    // Validate CRC over the two ID bytes
-    if (Humid_CRC8(resp, 2) != resp[2])
-        return false;
+    if (Humid_CRC8(resp, 2) != resp[2]) return false;
 
-    // Check SHTC3-specific bits: bit11=1, bits5:0=0b000111 (Table 15)
     uint16_t id = ((uint16_t)resp[0] << 8) | resp[1];
-    if ((id & 0x083F) != 0x0807)
-        return false;
+    if ((id & 0x083F) != 0x0807) return false;
 
-    // Put sensor to sleep after init (Section 5.2)
-    Humid_SendCmd(0xB098);
-
+    Humid_SendCmd(0xB098);  // already wrapped above
     return true;
 }
+
 
 /*
  *  Task definition for continuous reading from Humidity sensor
@@ -670,6 +864,8 @@ void Humid_Task(void *argument)
         }
     }
 
+    osDelay(INITPAUSE);
+
     for (;;)
     {
         bool ok = false;
@@ -682,9 +878,11 @@ void Humid_Task(void *argument)
         if (!Humid_SendCmd(0x58E0)) goto sleep_retry;
         osDelay(13);    // datasheet Table 5: max 12.1ms in normal mode, use 13ms margin
 
-        // 3. Read 6 bytes: RH_MSB RH_LSB RH_CRC T_MSB T_LSB T_CRC
-        if (HAL_I2C_Master_Receive(&hi2c1, SHTC3ADDR, rx, 6, HAL_MAX_DELAY) != HAL_OK)
-            goto sleep_retry;
+        // 3. Read 6 bytes
+		osMutexAcquire(i2cMutex, osWaitForever);
+		bool rx_ok = HAL_I2C_Master_Receive(&hi2c1, SHTC3ADDR, rx, 6, 50) == HAL_OK;
+		osMutexRelease(i2cMutex);
+		if (!rx_ok) goto sleep_retry;
 
         // 4. Validate both CRCs (Section 5.10)
         if (Humid_CRC8(&rx[0], 2) != rx[2]) goto sleep_retry;
@@ -757,6 +955,8 @@ void Board_Task(void *argument)
 			osDelay(1);
 		}
 	}
+
+	osDelay(INITPAUSE);
 
 	for (;;)
 	{

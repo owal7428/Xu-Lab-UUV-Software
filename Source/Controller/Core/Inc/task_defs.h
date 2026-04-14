@@ -21,7 +21,7 @@
 #define RX_BUFFER_SIZE (PACKETSIZE * 2)
 #define SERVO_ARRAY_SIZE (1<<14)
 
-#define Bar30ADDR (0x76 << 1)
+#define BAR30ADDR (0x76 << 1)
 #define SHTC3ADDR (0x70 << 1)
 
 
