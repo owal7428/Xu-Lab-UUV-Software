@@ -19,8 +19,8 @@ void Cleanup(SDL_Window* Window)
 
 int main(int argc, char* argv[]) 
 {
-    const char* VideoURL = argc >= 2 ? argv[1] : "tcp://127.0.0.1:5555";
-    const char* CommURL = argc >= 3 ? argv[2] : "tcp://127.0.0.1:5556";
+    const char* VideoURL = argc >= 2 ? argv[1] : "tcp://192.168.50.1:5555";
+    const char* CommURL = argc >= 3 ? argv[2] : "tcp://192.168.50.1:5556";
 
     uint16_t BufferSize = 4;
     uint16_t BufferingCutoff = 0;
