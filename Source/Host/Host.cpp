@@ -178,8 +178,8 @@ int main(int argc, char* argv[])
                             break;
                         
                         case SDL_GAMEPAD_AXIS_LEFTY:
-                            printf("Gamepad left stick vertical: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
-                            NetMessage.set_forward(static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            printf("Gamepad left stick vertical: %f\n", static_cast<float>(-Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_forward(static_cast<float>(-Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_RIGHTX:
@@ -188,8 +188,8 @@ int main(int argc, char* argv[])
                             break;
                         
                         case SDL_GAMEPAD_AXIS_RIGHTY:
-                            printf("Gamepad right stick vertical: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
-                            NetMessage.set_pitch(static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            printf("Gamepad right stick vertical: %f\n", static_cast<float>(-Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_pitch(static_cast<float>(-Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
