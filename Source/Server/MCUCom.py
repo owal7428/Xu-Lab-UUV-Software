@@ -14,18 +14,13 @@ class MCUComServer:
         self.out_packet.SoP[0] = 0xAA
         self.out_packet.SoP[1] = 0x55
 
-    def set_servo(self, i, amplitude=80, speed=1, horz_offset=0, vert_offset=0):
-        self.out_packet.ServoCmd[i].amplitude = amplitude
-        self.out_packet.ServoCmd[i].speed = speed
-        self.out_packet.ServoCmd[i].horz_offset = horz_offset
-        self.out_packet.ServoCmd[i].vert_offset = vert_offset
+    def set_servo(self, forward=0, pitch=0, roll=0):
+        self.out_packet.ServoCmd.forward = max(-1, min(1, forward))  # clamp to [-1, 1]
+        self.out_packet.ServoCmd.pitch = max(-1, min(1, pitch))  # clamp to [-1, 1]
+        self.out_packet.ServoCmd.roll = max(-1, min(1, roll))  # clamp to [-1, 1]
 
-    def set_all_servos(self, amplitude=80, speed=1, horz_offset=0, vert_offset=0):
-        for i in range(8):
-            self.set_servo(i, amplitude, speed, horz_offset, vert_offset)
-
-    def set_thruster(self, thrust):
-        self.out_packet.ThrusterCmd.thrust = thrust
+    def set_thruster(self, thrust=0):
+        self.out_packet.ThrusterCmd.thrust = max(0, min(1, thrust))  # clamp to [0, 1]
 
     def send_receive(self):
         size = ctypes.sizeof(self.out_packet)
@@ -87,8 +82,8 @@ if __name__ == "__main__":
     """
     ComServer = MCUComServer()
 
-    ComServer.set_all_servos(amplitude=80, speed=1, horz_offset=0, vert_offset=0)
-    ComServer.set_thruster(thrust=50)
+    ComServer.set_servo(forward=1, pitch=0, roll=0)
+    ComServer.set_thruster(thrust=1)
 
     try:
         while True:

@@ -10,15 +10,14 @@ def CalculateChecksum(packet_bytes):
 
 class ServoCmd_t(ctypes.Structure):
     _fields_ = [
-        ("amplitude", ctypes.c_float),
-        ("speed", ctypes.c_uint16),
-        ("horz_offset", ctypes.c_int16),
-        ("vert_offset", ctypes.c_int16),
+        ("forward", ctypes.c_float),
+        ("pitch", ctypes.c_float),
+        ("roll", ctypes.c_float),
     ]
 
 class ThrusterCmd_t(ctypes.Structure): 
     _fields_ = [
-        ("thrust", ctypes.c_int8),
+        ("thrust", ctypes.c_float),
     ]
 
 class IMUCom_t(ctypes.Structure): 
@@ -72,9 +71,7 @@ class InPacket(ctypes.Structure):
 class OutPacket(ctypes.Structure):
     _fields_ = [
         ("SoP", ctypes.c_uint8*2),
-        ("pad0", ctypes.c_uint8*2), # mimic STM32 padding
-        ("ServoCmd", ServoCmd_t*8),
+        ("ServoCmd", ServoCmd_t),
         ("ThrusterCmd", ThrusterCmd_t),
         ("CheckSum", ctypes.c_uint8),
-        ("pad1", ctypes.c_uint8),
     ]

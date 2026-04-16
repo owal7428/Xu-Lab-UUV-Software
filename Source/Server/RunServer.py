@@ -6,6 +6,7 @@ import multiprocessing as mp
 import argparse
 
 from NetworkServer import *
+from MCUCom import *
 
 WIDTH = 1280
 HEIGHT = 720
@@ -86,6 +87,7 @@ def stream_worker(url: str):
 
 def main():
     Server = NetworkServer()
+    SPIServer = MCUComServer()
 
     ControlMessage = ControlMessage_pb2.ControlMessage()
 
@@ -93,8 +95,20 @@ def main():
         Message = Server.Receive()
 
         if Message is not None:
+            # Deserialize control message
             ControlMessage.ParseFromString(Message)
-            print(f"Received control message: Forward={ControlMessage.Forward}, Pitch={ControlMessage.Pitch}, Roll={ControlMessage.Roll}, Thrust={ControlMessage.Thrust}")
+
+            SPIServer.set_servo(
+                forward=ControlMessage.Forward,
+                pitch=ControlMessage.Pitch,
+                roll=ControlMessage.Roll
+            )
+            SPIServer.set_thruster(thrust=ControlMessage.Thrust)
+
+            return_packet = SPIServer.send_receive()
+
+            if return_packet is not None:
+                print(f"Air temp: {return_packet.HumidCom.air_temp}")
 
 
 if __name__ == "__main__":

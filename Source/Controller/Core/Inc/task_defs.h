@@ -2,7 +2,7 @@
  * task_defs.h
  *
  *  Created on: 17 Mar 2026
- *      Author: leons
+ *      Author: leons, Owen Allison
  */
 
 #include "main.h"
@@ -40,15 +40,14 @@ extern UART_HandleTypeDef huart5;
  */
 typedef struct
 {
-	float amplitude;
-	uint16_t speed;
-	int16_t horz_offset;
-	int16_t vert_offset;
+	float forward;
+	float pitch;
+	float roll;
 } ServoCmd_t;
 
 typedef struct
 {
-	int8_t thrust;
+	float thrust;
 } ThrusterCmd_t;
 
 
@@ -116,23 +115,10 @@ typedef struct
 typedef struct
 {
 	uint8_t SoP[2]; // header marking start of packet for alignment
-	uint8_t pad0[2]; // explicit memory padding
-	ServoCmd_t ServoCmd[8];
+	ServoCmd_t ServoCmd;
 	ThrusterCmd_t ThrusterCmd;
 	uint8_t CheckSum;
-	uint8_t pad1; // explicit memory padding
 } InPacket_t;
-
-
-
-/* Helper struct for communicating to servos which channel and tim they are for initialization and ID */
-typedef struct
-{
-	uint8_t SoP[2];
-    TIM_HandleTypeDef *tim;
-    uint32_t channel;
-    uint8_t CheckSum;
-} ServoParams_t;
 
 
 
