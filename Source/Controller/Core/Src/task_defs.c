@@ -48,85 +48,21 @@ uint8_t CalculateChecksum(uint8_t* data, size_t length)
     return cs;
 }
 
-/*
- *  Find the Start of Packet and return the index for synchronizing communication
- */
-int FindSoP(uint8_t *buf, size_t len)
+bool DecodePacket(uint8_t rx[PACKETSIZE], InPacket_t *in)
 {
-    for (size_t i = 0; i < len - 1; i++)
-    {
-        if (buf[i] == 0xAA && buf[i + 1] == 0x55)
-        {
-            return i;
-        }
-    }
-    return -1;
-}
+	// Copy raw bytes into struct
+    memcpy(in, rx, sizeof(InPacket_t));
 
-/*
- *  Handle synchronization, checksum, and packet casting
- *  	returns true if packet is found
- *  	returns false otherwise
- */
-bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
-{
-	uint8_t rx_buffer[RX_BUFFER_SIZE];
-	size_t rx_len = 0;
+    // Don't include last byte in checksum calculation (that byte is the checksum itself)
+    uint8_t calc = CalculateChecksum((uint8_t*)in, sizeof(InPacket_t) - 1);
 
-	// Append new SPI data to rolling buffer
-	if (rx_len + PACKETSIZE <= RX_BUFFER_SIZE)
-	{
-	    memcpy(&rx_buffer[rx_len], rx, PACKETSIZE);
-	    rx_len += PACKETSIZE;
-	}
-	else
-	{
-	    // Overflow protection: reset buffer
-	    rx_len = 0;
-	}
+    if (calc != in->CheckSum)
+        return false;
 
-	// Try to extract a valid packet
-	int packet_found = 0;
-	while (rx_len >= sizeof(InPacket_t))
-	{
-	    int idx = FindSoP(rx_buffer, rx_len);
+    if (in->SoP[0] != 0xAA || in->SoP[1] != 0x55)
+        return false;
 
-	    if (idx < 0)
-	    {
-	        // No SOP found, discard buffer
-	        rx_len = 0;
-	        break;
-	    }
-
-	    // Not enough data yet for full packet
-	    if ((size_t)(idx + sizeof(InPacket_t)) > rx_len) break;
-
-	    uint8_t *pkt_ptr = &rx_buffer[idx];
-
-	    // Compute checksum over received packet (excluding checksum field)
-	    uint8_t calc = CalculateChecksum(pkt_ptr, sizeof(InPacket_t) - sizeof(in->CheckSum));
-	    uint8_t recv = pkt_ptr[sizeof(InPacket_t) - 1];
-
-	    if (calc == recv)
-	    {
-	        // Valid packet
-	        memcpy(in, pkt_ptr, sizeof(InPacket_t));
-	        packet_found = 1;
-
-	        // Remove consumed bytes
-	        size_t consumed = idx + sizeof(InPacket_t);
-	        memmove(rx_buffer, &rx_buffer[consumed], rx_len - consumed);
-	        rx_len -= consumed;
-
-	        break; // process one packet per loop
-	    }
-	    else
-	    {
-	        // Bad checksum, shift by 1 and retry
-	        memmove(rx_buffer, &rx_buffer[idx + 1], rx_len - (idx + 1));
-	        rx_len -= (idx + 1);
-	    }
-	}
+    return true;
 }
 
 /*
@@ -134,13 +70,21 @@ bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
  */
 void PiCom_Task(void * argument)
 {
-	uint8_t tx[PACKETSIZE];
-	uint8_t rx[PACKETSIZE];
-	OutPacket_t out;
-	InPacket_t in;
+	uint8_t tx[PACKETSIZE] = {0};
+	uint8_t rx[PACKETSIZE] = {0};
+	OutPacket_t out = {0};
+	InPacket_t in = {0};
 	ServoCmd_t servoCommand;
 	ThrusterCmd_t thrusterCommand;
-	bool packet_found = false;
+
+	memset(&out, 0, sizeof(out));
+	memset(&out, 0, sizeof(in));
+
+	out.SoP[0] = 0xAA;
+	out.SoP[1] = 0x55;
+	out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - 1);
+
+	memcpy(tx, &out, sizeof(out));
 
 	// TODO: Establish communications check with Raspberry Pi
 	// TODO: Check which sensors are online for queue receiving
@@ -148,13 +92,20 @@ void PiCom_Task(void * argument)
 
 	for (;;)
 	{
-		/* clean all communications structures to avoid sending old data */
-		memset(tx, 0, PACKETSIZE);
-		memset(rx, 0, PACKETSIZE);
+		// perform transfer (controller is slave device so we don't modify CS lines here)
+		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, portMAX_DELAY);
+
+		/* distribute commands */
+		// TODO: Adjust queue timeouts in case of queue overflowing
+
+		if (DecodePacket(rx, &in))
+		{
+			xQueueSend(ServoQueue, &in.ServoCmd, 1);
+			xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
+		}
+
+		// Reset outgoing packet
 		memset(&out, 0, sizeof(OutPacket_t));
-		memset(&in, 0, sizeof(InPacket_t));
-		memset(&servoCommand, 0, sizeof(ServoCmd_t));
-		memset(&thrusterCommand, 0, sizeof(ThrusterCmd_t));
 
 		/* collect new data from all sensor queues into the outgoing packet */
 		out.SoP[0] = 0xAA;
@@ -165,29 +116,14 @@ void PiCom_Task(void * argument)
 		xQueueReceive(Bar30Queue, &out.Bar30Com, 1);
 		xQueueReceive(HumidQueue, &out.HumidCom, 1);
 		xQueueReceive(BoardQueue, &out.BoardCom, 1);
-		out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - sizeof(out.CheckSum));
+
+		// Don't include last byte in checksum calculation
+		out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - 1);
 
 		/* serialize packet struct into bytes */
-		memcpy(tx, &out, sizeof(OutPacket_t));
-
-		/* perform transfer (using NSS so no need to manually pull any chips low or high) */
-		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, portMAX_DELAY);
-
-		/* de-serialize byte packet into struct and confirm checksum */
-		packet_found = HandleInput(rx, &in);
-
-		/* distribute commands */
-		// TODO: Adjust queue timeouts in case of queue overflowing
-		// TODO: Avoid sending duplicate commands to thruster or servos
-		if (packet_found)
-		{
-			xQueueSend(ServoQueue, &in.ServoCmd, 1);
-			xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
-		}
+		memcpy(tx, &out, sizeof(OutPacket_t));	
 	}
 }
-
-
 
 /*
  *  Helper function to write to a specific register on a specific SPI line and on a specific chip select
@@ -212,8 +148,6 @@ void SPI_Read(uint8_t line, uint8_t chip, uint8_t reg, uint8_t* buffer, uint8_t 
 {
 	//
 }
-
-
 
 /*
  *  Initialize the settings of the IMU to prepare for active reading
@@ -243,8 +177,6 @@ void IMU_Task(void *argument)
 	}
 }
 
-
-
 /*
  *  Initialize the settings of the Magnetometer to prepare for active reading
  */
@@ -270,8 +202,6 @@ void Mag_Task(void *argument)
 	}
 }
 
-
-
 /*
  *  Initialize the settings of the Bar30 Pressure/Temp sensor to prepare for active reading
  */
@@ -296,8 +226,6 @@ void Bar30_Task(void* argument)
 	}
 }
 
-
-
 /*
  *  Initialize the settings of the Humidity sensor to prepare for active reading
  */
@@ -321,8 +249,6 @@ void Humid_Task(void *argument)
 		osDelay(1);
 	}
 }
-
-
 
 /*
  *  Initialize the settings of the Board temperature sensor to prepare for active reading
@@ -440,15 +366,6 @@ void Servo_Task(void* argument)
 
 		osDelay(1);
 	}
-}
-
-
-/*
- *  Specific initialization routine for hardware
- */
-void Thruster_Init(void)
-{
-	//
 }
 
 /*

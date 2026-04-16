@@ -4,7 +4,7 @@ PACKETSIZE = 128
 
 def CalculateChecksum(packet_bytes):
     cs = 0
-    for b in packet_bytes[:-1]:
+    for b in packet_bytes:
         cs ^= b
     return cs
 
@@ -58,20 +58,22 @@ class InPacket(ctypes.Structure):
     _pack_ = 1
     _fields_ = [
         ("SoP", ctypes.c_uint8*2),
-        ("pad0", ctypes.c_uint8*2), # mimic STM32 padding
         ("IMUCom", IMUCom_t),
         ("MagCom", MagCom_t),
         ("Bar30Com", Bar30Com_t),
         ("HumidCom", HumidCom_t),
         ("BoardCom", BoardCom_t),
         ("CheckSum", ctypes.c_uint8),
-        ("pad1", ctypes.c_uint8), # bring size to 64 bytes total
     ]
 
 class OutPacket(ctypes.Structure):
+    _pack_ = 1
     _fields_ = [
         ("SoP", ctypes.c_uint8*2),
         ("ServoCmd", ServoCmd_t),
         ("ThrusterCmd", ThrusterCmd_t),
         ("CheckSum", ctypes.c_uint8),
     ]
+
+in_size = ctypes.sizeof(InPacket)
+out_size = ctypes.sizeof(OutPacket)

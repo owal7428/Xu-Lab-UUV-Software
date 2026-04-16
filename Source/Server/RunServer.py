@@ -97,7 +97,7 @@ def main():
         if Message is not None:
             # Deserialize control message
             ControlMessage.ParseFromString(Message)
-
+            
             SPIServer.set_servo(
                 forward=ControlMessage.Forward,
                 pitch=ControlMessage.Pitch,

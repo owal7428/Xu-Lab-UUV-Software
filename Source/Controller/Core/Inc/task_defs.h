@@ -20,8 +20,6 @@
 #define PACKETSIZE 128 // 128 bytes
 #define RX_BUFFER_SIZE (PACKETSIZE * 2)
 
-
-
 /* external definitions of connection ports */
 extern ADC_HandleTypeDef hadc1;
 extern I2C_HandleTypeDef hi2c1;
@@ -33,7 +31,16 @@ extern TIM_HandleTypeDef htim4;
 extern UART_HandleTypeDef huart4;
 extern UART_HandleTypeDef huart5;
 
-
+/* Function definitions for tasks to be called in main.c */
+void LED_Task(void* argument);
+void PiCom_Task(void *argument);
+void Servo_Task(void* argument);
+void Thruster_Task(void* arugment);
+void IMU_Task(void *argument);
+void Mag_Task(void *argument);
+void Bar30_Task(void* argument);
+void Humid_Task(void *argument);
+void Board_Task(void *argument);
 
 /*
  *  Struct defenitions for communicating commands from the Raspberry Pi to the tasks
@@ -49,8 +56,6 @@ typedef struct
 {
 	float thrust;
 } ThrusterCmd_t;
-
-
 
 /*
  *  Struct defenitions for communicating task data to the Raspberry Pi communication task
@@ -89,48 +94,31 @@ typedef struct
 	float board_temp;
 } BoardCom_t;
 
-
+// These structs are packed for consistency with Python struct definitions
 
 /*
  *  Struct defenition for assembling communication packet out to the Raspberry Pi
  */
-typedef struct
+typedef struct __attribute__((packed))
 {
 	uint8_t SoP[2]; // header marking start of packet for alignment
-	uint8_t pad0[2]; // already automatically added for memory padding
 	IMUCom_t IMUCom;
 	MagCom_t MagCom;
 	Bar30Com_t Bar30Com;
 	HumidCom_t HumidCom;
 	BoardCom_t BoardCom;
 	uint8_t CheckSum; // for detecting corruption
-	uint8_t pad1; // already automatically added for memory padding
 } OutPacket_t;
-
-
 
 /*
  *  Struct defenitions for interpreting communication packets from the Raspberry Pi
  */
-typedef struct
+typedef struct __attribute__((packed))
 {
 	uint8_t SoP[2]; // header marking start of packet for alignment
 	ServoCmd_t ServoCmd;
 	ThrusterCmd_t ThrusterCmd;
 	uint8_t CheckSum;
 } InPacket_t;
-
-
-
-/* Function definitions for tasks to be called in main.c */
-void LED_Task(void* argument);
-void PiCom_Task(void *argument);
-void Servo_Task(void* argument);
-void Thruster_Task(void* arugment);
-void IMU_Task(void *argument);
-void Mag_Task(void *argument);
-void Bar30_Task(void* argument);
-void Humid_Task(void *argument);
-void Board_Task(void *argument);
 
 #endif /* CORE_INC_TASK_DEFS_H_ */

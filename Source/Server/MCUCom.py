@@ -1,4 +1,5 @@
 import spidev
+import time
 from ConnectionTypes import *
 
 class MCUComServer:
@@ -9,7 +10,6 @@ class MCUComServer:
         self.spi.mode = 0
 
         self.out_packet = OutPacket()
-        self.in_bytes = bytearray() # this buffer will accumulate incoming bytes until a full packet can be parsed
 
         self.out_packet.SoP[0] = 0xAA
         self.out_packet.SoP[1] = 0x55
@@ -23,55 +23,32 @@ class MCUComServer:
         self.out_packet.ThrusterCmd.thrust = max(0, min(1, thrust))  # clamp to [0, 1]
 
     def send_receive(self):
-        size = ctypes.sizeof(self.out_packet)
+        # Serialize struct into bytes
+        out_bytes = bytearray(ctypes.string_at(ctypes.byref(self.out_packet), out_size))
 
-        if size > PACKETSIZE:
-            raise ValueError("OutPacket too large!")
+        # Compute and set checksum in byte array
+        out_bytes[-1] = CalculateChecksum(out_bytes[:-1])
 
-        # Get checksum for outgoing packet
-        self.out_packet.CheckSum = CalculateChecksum(
-            bytearray(ctypes.string_at(ctypes.byref(self.out_packet), size - 1))
-        )
-
-        out_bytes = bytearray(PACKETSIZE)
-        out_bytes[:size] = ctypes.string_at(ctypes.byref(self.out_packet), size)
+        # Copy byte array to tx which has fixed size agreed by Pi and controller
+        tx = bytearray(PACKETSIZE)
+        tx[:out_size] = out_bytes
 
         # Send packet and receive response
-        self.in_bytes.extend(self.spi.xfer2(out_bytes))
+        rx = self.spi.xfer2(tx)
 
-        in_packet_len = ctypes.sizeof(InPacket)
+        # Decode response bytes
+        in_packet_raw = bytes(rx[:in_size])
+        in_packet = InPacket.from_buffer_copy(in_packet_raw)
 
-        # Find and parse oldest available packet in buffer
-        while len(self.in_bytes) >= PACKETSIZE:
-            # Look for start of packet
-            index = self.in_bytes.find(b'\xAA\x55')
+        checksum = CalculateChecksum(in_packet_raw[:-1])
 
-            # If start of packet not found, return null and clear buffer to avoid overflow
-            if index == -1:
-                self.in_bytes.clear()
-                return None
+        if checksum != in_packet.CheckSum:
+            return None
 
-            # If packet start found but full packet not yet received, wait for more data
-            if len(self.in_bytes) - index < PACKETSIZE:
-                self.in_bytes = self.in_bytes[index:]
-                return None
+        if in_packet.SoP[0] != 0xAA or in_packet.SoP[1] != 0x55:
+            return None
 
-            # Remove any bytes before the start of the packet to ensure we are aligned for parsing
-            self.in_bytes = self.in_bytes[index:]
-
-            raw = self.in_bytes[:PACKETSIZE]
-            packet = InPacket.from_buffer_copy(raw)
-
-            checksum = CalculateChecksum(
-                ctypes.string_at(ctypes.byref(packet), in_packet_len - 1)
-            )
-
-            self.in_bytes = self.in_bytes[PACKETSIZE:]
-
-            if checksum != packet.CheckSum:
-                return None
-
-            return packet
+        return in_packet
 
     def close(self):
         self.spi.close()
@@ -81,9 +58,24 @@ if __name__ == "__main__":
     Example usage of MCUComServer. This will set fixed values and print continuous sensor data.
     """
     ComServer = MCUComServer()
+    
+    ComServer.set_servo(forward=1)
+    ComServer.send_receive()
+    time.sleep(5)
 
-    ComServer.set_servo(forward=1, pitch=0, roll=0)
-    ComServer.set_thruster(thrust=1)
+    ComServer.set_servo(forward=0.25)
+    ComServer.send_receive()
+    time.sleep(5)
+
+    ComServer.set_servo(forward=1)
+    ComServer.send_receive()
+    time.sleep(5)
+
+    ComServer.set_servo(forward=0.25)
+    ComServer.send_receive()
+    time.sleep(5)
+
+    ComServer.set_servo(forward=0)
 
     try:
         while True:
