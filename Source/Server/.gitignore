@@ -1,2 +1,5 @@
 # Don't include python virtual environment files
 venv/
+
+# Don't include python bytecode files
+__pycache__/
