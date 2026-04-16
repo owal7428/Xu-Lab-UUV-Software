@@ -2,7 +2,7 @@ import zmq
 import ControlMessage_pb2
 
 class NetworkServer:
-    def __init__(self, url="tcp://*:1234"):
+    def __init__(self, url="tcp://*:5556"):
         self.Context = zmq.Context()
         self.Socket = self.Context.socket(zmq.DEALER)
         self.Socket.bind(url)

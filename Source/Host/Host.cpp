@@ -19,14 +19,15 @@ void Cleanup(SDL_Window* Window)
 
 int main(int argc, char* argv[]) 
 {
-    const char* URL = argc >= 2 ? argv[1] : "tcp://127.0.0.1:1234";
+    const char* VideoURL = argc >= 2 ? argv[1] : "tcp://127.0.0.1:5555";
+    const char* CommURL = argc >= 3 ? argv[2] : "tcp://127.0.0.1:5556";
 
     uint16_t BufferSize = 4;
     uint16_t BufferingCutoff = 0;
 
-    if (argc >= 3)
+    if (argc >= 4)
     {
-        uint16_t NewBufferSize = static_cast<uint16_t>(std::stoi(argv[2]));
+        uint16_t NewBufferSize = static_cast<uint16_t>(std::stoi(argv[3]));
 
         if (NewBufferSize <= 0)
             fprintf(stderr, "Buffer size is too small, setting to default: 4\n");
@@ -34,9 +35,9 @@ int main(int argc, char* argv[])
             BufferSize = NewBufferSize;
     }
 
-    if (argc >= 4)
+    if (argc >= 5)
     {
-        uint16_t NewBufferingCutoff = static_cast<uint16_t>(std::stoi(argv[3]));
+        uint16_t NewBufferingCutoff = static_cast<uint16_t>(std::stoi(argv[4]));
 
         if (NewBufferingCutoff >= BufferSize)
             fprintf(stderr, "Buffering cutoff is too big, setting to default: 0\n");
@@ -89,7 +90,7 @@ int main(int argc, char* argv[])
      * This should be changed in the future to allow for input connection first and auto-retry video. */
 
     FrameBuffer Buffer = FrameBuffer(BufferSize);
-    VideoReceiver Receiver = VideoReceiver(URL, &Buffer);
+    VideoReceiver Receiver = VideoReceiver(VideoURL, &Buffer);
 
     // Get video resolution from stream
     int Width = Receiver.GetVideoWidth();
@@ -99,7 +100,7 @@ int main(int argc, char* argv[])
     
     Receiver.StartReceiveLoop();
 
-    NetworkClient NetClient(URL);
+    NetworkClient NetClient(CommURL);
 
     ControlMessage::ControlMessage NetMessage;
     
