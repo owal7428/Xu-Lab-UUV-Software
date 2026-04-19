@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
+# ---- DHCP Server Setup ----
+
 read -rp "Interface [default: eth0]: " IFACE
 IFACE=${IFACE:-eth0}
 
@@ -40,5 +42,26 @@ EOF
 echo "--- Enabling dnsmasq..."
 systemctl enable dnsmasq
 systemctl restart dnsmasq
+
+# ---- Python Virtual Environment Setup ----
+
+# Get absolute script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/venv"
+REQ_FILE="$SCRIPT_DIR/requirements.txt"
+
+# Create venv if missing
+if [ ! -d "$VENV_DIR" ]; then
+    echo "--- Creating python virtual environment..."
+    python3 -m venv "$VENV_DIR"
+fi
+
+PIP="$VENV_DIR/bin/pip"
+
+echo "--- Installing python dependencies..."
+if ! "$PIP" install -r "$REQ_FILE"; then
+    echo "--- Dependency installation failed; check internet connection."
+    exit 1
+fi
 
 echo "--- Done."
