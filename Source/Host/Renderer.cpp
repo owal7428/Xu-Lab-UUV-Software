@@ -49,17 +49,9 @@ Renderer::Renderer(int Width, int Height, size_t Cutoff, FrameBuffer *BufferPtr,
     glGenTextures(1, &this->TextureU);
     glGenTextures(1, &this->TextureV);
 
-    auto InitTexture = [](GLuint Texture, int Width, int Height) 
-    {
-        glBindTexture(GL_TEXTURE_2D, Texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, Width, Height, 0,GL_RED, GL_UNSIGNED_BYTE, nullptr);
-    };
-
-    InitTexture(this->TextureY, Width, Height);
-    InitTexture(this->TextureU, Width/2, Height/2);
-    InitTexture(this->TextureV, Width/2, Height/2);
+    this->UpdateTexture(this->TextureY, Width, Height);
+    this->UpdateTexture(this->TextureU, Width/2, Height/2);
+    this->UpdateTexture(this->TextureV, Width/2, Height/2);
 
     this->BufferingCutoff = Cutoff;
     this->bIsBuffering = true;
@@ -68,6 +60,14 @@ Renderer::Renderer(int Width, int Height, size_t Cutoff, FrameBuffer *BufferPtr,
 void Renderer::UpdateViewport(int Width, int Height)
 {
     glViewport(0, 0, Width, Height);
+}
+
+void Renderer::UpdateTexture(GLuint Texture, int Width, int Height)
+{
+    glBindTexture(GL_TEXTURE_2D, Texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, Width, Height, 0,GL_RED, GL_UNSIGNED_BYTE, nullptr);
 }
 
 int Renderer::Render(double CurrentTime, double &NextRenderTime)

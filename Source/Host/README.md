@@ -6,3 +6,5 @@
   - AVFormat
   - AVCodec
   - AVUtil
+- Protobuf
+- ZeroMQ

@@ -4,8 +4,11 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include "Protobuf/ControlMessage.pb.h"
+
 #include "FrameBuffer.hpp"
 #include "Renderer.hpp"
+#include "NetworkClient.hpp"
 #include "VideoReceiver.hpp"
 
 void Cleanup(SDL_Window* Window)
@@ -16,14 +19,15 @@ void Cleanup(SDL_Window* Window)
 
 int main(int argc, char* argv[]) 
 {
-    const char* URL = argc >= 2 ? argv[1] : "tcp://127.0.0.1:1234";
+    const char* VideoURL = argc >= 2 ? argv[1] : "tcp://192.168.50.1:5555";
+    const char* CommURL = argc >= 3 ? argv[2] : "tcp://192.168.50.1:5556";
 
     uint16_t BufferSize = 4;
     uint16_t BufferingCutoff = 0;
 
-    if (argc >= 3)
+    if (argc >= 4)
     {
-        uint16_t NewBufferSize = static_cast<uint16_t>(std::stoi(argv[2]));
+        uint16_t NewBufferSize = static_cast<uint16_t>(std::stoi(argv[3]));
 
         if (NewBufferSize <= 0)
             fprintf(stderr, "Buffer size is too small, setting to default: 4\n");
@@ -31,9 +35,9 @@ int main(int argc, char* argv[])
             BufferSize = NewBufferSize;
     }
 
-    if (argc >= 4)
+    if (argc >= 5)
     {
-        uint16_t NewBufferingCutoff = static_cast<uint16_t>(std::stoi(argv[3]));
+        uint16_t NewBufferingCutoff = static_cast<uint16_t>(std::stoi(argv[4]));
 
         if (NewBufferingCutoff >= BufferSize)
             fprintf(stderr, "Buffering cutoff is too big, setting to default: 0\n");
@@ -82,8 +86,11 @@ int main(int argc, char* argv[])
 
     printf("Press keys or controller buttons. ESC or window close to quit.\n\n");
 
+    /* TODO: Receiver will block until connection is made, so input can't send without video connection being made.
+     * This should be changed in the future to allow for input connection first and auto-retry video. */
+
     FrameBuffer Buffer = FrameBuffer(BufferSize);
-    VideoReceiver Receiver = VideoReceiver(URL, &Buffer);
+    VideoReceiver Receiver = VideoReceiver(VideoURL, &Buffer);
 
     // Get video resolution from stream
     int Width = Receiver.GetVideoWidth();
@@ -92,14 +99,20 @@ int main(int argc, char* argv[])
     Renderer FrameRenderer = Renderer(Width, Height, BufferingCutoff, &Buffer, "../Shaders/YUVToRGB");
     
     Receiver.StartReceiveLoop();
+
+    NetworkClient NetClient(CommURL);
+
+    ControlMessage::ControlMessage NetMessage;
     
     bool IsRunning = true;
 
     double NextRenderTime = 0.0f;
+    double NextNetUpdateTime = 0.0f;
 
     // Begin event loop
     while (IsRunning) 
     {
+        // Current time in seconds
         double CurrentTime = static_cast<double>(SDL_GetTicks()) / 1000.0f;
 
         // Get input
@@ -165,19 +178,23 @@ int main(int argc, char* argv[])
                             break;
                         
                         case SDL_GAMEPAD_AXIS_LEFTY:
-                            printf("Gamepad left stick vertical: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            printf("Gamepad left stick vertical: %f\n", static_cast<float>(-Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_forward(static_cast<float>(-Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_RIGHTX:
                             printf("Gamepad right stick horizontal: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_roll(static_cast<float>(Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_RIGHTY:
-                            printf("Gamepad right stick vertical: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            printf("Gamepad right stick vertical: %f\n", static_cast<float>(-Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_pitch(static_cast<float>(-Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
                             printf("Gamepad left trigger: %f\n", static_cast<float>(Event.gaxis.value) / 32767.0f);
+                            NetMessage.set_thrust(static_cast<float>(Event.gaxis.value) / 32767.0f);
                             break;
                         
                         case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
@@ -200,6 +217,18 @@ int main(int argc, char* argv[])
         {
             if (FrameRenderer.Render(CurrentTime, NextRenderTime) >= 0)
                 SDL_GL_SwapWindow(Window);
+        }
+
+        if (CurrentTime >= NextNetUpdateTime)
+        {
+            std::string OutputStr;
+
+            bool Success = NetMessage.SerializeToString(&OutputStr);
+
+            if (Success)
+                NetClient.Send(OutputStr);
+
+            NextNetUpdateTime = CurrentTime + 0.01f; // Send input updates at 100 Hz
         }
     }
 

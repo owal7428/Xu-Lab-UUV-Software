@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package ControlMessage;
+
+// Contains controller input update values
+message ControlMessage 
+{
+  float Forward = 1;
+  float Pitch = 2;
+  float Roll = 3;
+  float Thrust = 4;
+}

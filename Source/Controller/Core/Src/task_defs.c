@@ -7,24 +7,17 @@
 
 #include "task_defs.h"
 
-
-
 /* Definition of handles for all the tasks' communication queues */
 QueueHandle_t IMUQueue;
 QueueHandle_t MagQueue;
 QueueHandle_t Bar30Queue;
 QueueHandle_t HumidQueue;
 QueueHandle_t BoardQueue;
+QueueHandle_t ServoQueue;
 QueueHandle_t ThrusterQueue;
-QueueHandle_t ServoQueue[8];
 
 /* Mutex lock for making sure that SPI1 communication doesn't collide */
 osMutexId_t spiMutex;
-
-/* Array to store parameters that ID each servo task to its corresponding servo */
-ServoParams_t servoParams[2][4];
-
-
 
 /*
  *  Test Task for checking flashing and power
@@ -42,8 +35,6 @@ void LED_Task(void* argument)
 	}
 }
 
-
-
 /*
  *  Step through data byte by byte and calculate xor checksum of all the data to check for corruption
  */
@@ -57,85 +48,21 @@ uint8_t CalculateChecksum(uint8_t* data, size_t length)
     return cs;
 }
 
-/*
- *  Find the Start of Packet and return the index for synchronizing communication
- */
-int FindSoP(uint8_t *buf, size_t len)
+bool DecodePacket(uint8_t rx[PACKETSIZE], InPacket_t *in)
 {
-    for (size_t i = 0; i < len - 1; i++)
-    {
-        if (buf[i] == 0xAA && buf[i + 1] == 0x55)
-        {
-            return i;
-        }
-    }
-    return -1;
-}
+	// Copy raw bytes into struct
+    memcpy(in, rx, sizeof(InPacket_t));
 
-/*
- *  Handle synchronization, checksum, and packet casting
- *  	returns true if packet is found
- *  	returns false otherwise
- */
-bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
-{
-	uint8_t rx_buffer[RX_BUFFER_SIZE];
-	size_t rx_len = 0;
+    // Don't include last byte in checksum calculation (that byte is the checksum itself)
+    uint8_t calc = CalculateChecksum((uint8_t*)in, sizeof(InPacket_t) - 1);
 
-	// Append new SPI data to rolling buffer
-	if (rx_len + PACKETSIZE <= RX_BUFFER_SIZE)
-	{
-	    memcpy(&rx_buffer[rx_len], rx, PACKETSIZE);
-	    rx_len += PACKETSIZE;
-	}
-	else
-	{
-	    // Overflow protection: reset buffer
-	    rx_len = 0;
-	}
+    if (calc != in->CheckSum)
+        return false;
 
-	// Try to extract a valid packet
-	int packet_found = 0;
-	while (rx_len >= sizeof(InPacket_t))
-	{
-	    int idx = FindSoP(rx_buffer, rx_len);
+    if (in->SoP[0] != 0xAA || in->SoP[1] != 0x55)
+        return false;
 
-	    if (idx < 0)
-	    {
-	        // No SOP found, discard buffer
-	        rx_len = 0;
-	        break;
-	    }
-
-	    // Not enough data yet for full packet
-	    if ((size_t)(idx + sizeof(InPacket_t)) > rx_len) break;
-
-	    uint8_t *pkt_ptr = &rx_buffer[idx];
-
-	    // Compute checksum over received packet (excluding checksum field)
-	    uint8_t calc = CalculateChecksum(pkt_ptr, sizeof(InPacket_t) - sizeof(in->CheckSum));
-	    uint8_t recv = pkt_ptr[sizeof(InPacket_t) - 1];
-
-	    if (calc == recv)
-	    {
-	        // Valid packet
-	        memcpy(in, pkt_ptr, sizeof(InPacket_t));
-	        packet_found = 1;
-
-	        // Remove consumed bytes
-	        size_t consumed = idx + sizeof(InPacket_t);
-	        memmove(rx_buffer, &rx_buffer[consumed], rx_len - consumed);
-	        rx_len -= consumed;
-
-	        break; // process one packet per loop
-	    }
-	    else
-	    {
-	        // Bad checksum, shift by 1 and retry
-	        memmove(rx_buffer, &rx_buffer[idx + 1], rx_len - (idx + 1));
-	        rx_len -= (idx + 1);
-	    }
-	}
+    return true;
 }
 
 /*
@@ -143,13 +70,21 @@ bool HandleInput(uint8_t rx[PACKETSIZE], InPacket_t *in)
  */
 void PiCom_Task(void * argument)
 {
-	uint8_t tx[PACKETSIZE];
-	uint8_t rx[PACKETSIZE];
-	OutPacket_t out;
-	InPacket_t in;
+	uint8_t tx[PACKETSIZE] = {0};
+	uint8_t rx[PACKETSIZE] = {0};
+	OutPacket_t out = {0};
+	InPacket_t in = {0};
+	ServoCmd_t servoCommand;
 	ThrusterCmd_t thrusterCommand;
-	ServoCmd_t servoCommand[8];
-	bool packet_found = false;
+
+	memset(&out, 0, sizeof(out));
+	memset(&out, 0, sizeof(in));
+
+	out.SoP[0] = 0xAA;
+	out.SoP[1] = 0x55;
+	out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - 1);
+
+	memcpy(tx, &out, sizeof(out));
 
 	// TODO: Establish communications check with Raspberry Pi
 	// TODO: Check which sensors are online for queue receiving
@@ -157,13 +92,20 @@ void PiCom_Task(void * argument)
 
 	for (;;)
 	{
-		/* clean all communications structures to avoid sending old data */
-		memset(tx, 0, PACKETSIZE);
-		memset(rx, 0, PACKETSIZE);
+		// perform transfer (controller is slave device so we don't modify CS lines here)
+		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, portMAX_DELAY);
+
+		/* distribute commands */
+		// TODO: Adjust queue timeouts in case of queue overflowing
+
+		if (DecodePacket(rx, &in))
+		{
+			xQueueSend(ServoQueue, &in.ServoCmd, 1);
+			xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
+		}
+
+		// Reset outgoing packet
 		memset(&out, 0, sizeof(OutPacket_t));
-		memset(&in, 0, sizeof(InPacket_t));
-		memset(&thrusterCommand, 0, sizeof(ThrusterCmd_t));
-		for (int i=0; i<8; i++) memset(&servoCommand[i], 0, sizeof(ServoCmd_t));
 
 		/* collect new data from all sensor queues into the outgoing packet */
 		out.SoP[0] = 0xAA;
@@ -174,29 +116,14 @@ void PiCom_Task(void * argument)
 		xQueueReceive(Bar30Queue, &out.Bar30Com, 1);
 		xQueueReceive(HumidQueue, &out.HumidCom, 1);
 		xQueueReceive(BoardQueue, &out.BoardCom, 1);
-		out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - sizeof(out.CheckSum));
+
+		// Don't include last byte in checksum calculation
+		out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - 1);
 
 		/* serialize packet struct into bytes */
-		memcpy(tx, &out, sizeof(OutPacket_t));
-
-		/* perform transfer (using NSS so no need to manually pull any chips low or high) */
-		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, portMAX_DELAY);
-
-		/* de-serialize byte packet into struct and confirm checksum */
-		packet_found = HandleInput(rx, &in);
-
-		/* distribute commands */
-		// TODO: Adjust queue timeouts in case of queue overflowing
-		// TODO: Avoid sending duplicate commands to thruster or servos
-		if (packet_found)
-		{
-			xQueueSend(ThrusterQueue, &in.ThrusterCmd, 1);
-			for (int i=0; i<8; i++) xQueueSend(ServoQueue[i], &in.ServoCmd[i], 1);
-		}
+		memcpy(tx, &out, sizeof(OutPacket_t));	
 	}
 }
-
-
 
 /*
  *  Helper function to write to a specific register on a specific SPI line and on a specific chip select
@@ -221,8 +148,6 @@ void SPI_Read(uint8_t line, uint8_t chip, uint8_t reg, uint8_t* buffer, uint8_t 
 {
 	//
 }
-
-
 
 /*
  *  Initialize the settings of the IMU to prepare for active reading
@@ -252,8 +177,6 @@ void IMU_Task(void *argument)
 	}
 }
 
-
-
 /*
  *  Initialize the settings of the Magnetometer to prepare for active reading
  */
@@ -279,8 +202,6 @@ void Mag_Task(void *argument)
 	}
 }
 
-
-
 /*
  *  Initialize the settings of the Bar30 Pressure/Temp sensor to prepare for active reading
  */
@@ -304,8 +225,6 @@ void Bar30_Task(void* argument)
 		osDelay(1);
 	}
 }
-
-
 
 /*
  *  Initialize the settings of the Humidity sensor to prepare for active reading
@@ -331,8 +250,6 @@ void Humid_Task(void *argument)
 	}
 }
 
-
-
 /*
  *  Initialize the settings of the Board temperature sensor to prepare for active reading
  */
@@ -356,65 +273,99 @@ void Board_Task(void *argument)
 	}
 }
 
-
-
-/*
- *  Helper function to convert an angle in degrees to a bounds checked pulse width
- */
+/* Converts servo angle to PWM pulse */
 uint16_t angle_to_pulse(int16_t angle)
 {
-	//
+	// Clamp angle to +/- 65 degrees
+
+	if (angle > 65) angle = 65;
+	if (angle < -65) angle = -65;
+
+	// Converts [-65, 65] to [7.5, 167.5] angle range (servo range is [0, 175])
+	angle += (87.5);
+
+	// Converts angle to [900 us, 2100 us] pulse range
+	return 900 + ((uint32_t)angle * 1200) / 175;
 }
 
-/*
- *  Initialize the positions of the servos to prepare for actuation
- */
-void Servo_Init(TIM_HandleTypeDef* tim, uint32_t channel)
-{
-	//
-}
+#define INCREMENT_RESOLUTION 16384
+#define INCREMENT_RESOLUTION_INV 0.00006103515625
 
 /*
- *  Task definition for continuous actuation of the servos
+ *  Task definition for continuous actuation of the servos,
+ *  implements a simple forward movement pattern
  */
 void Servo_Task(void* argument)
 {
-	ServoParams_t* params = (ServoParams_t*)argument;
 	ServoCmd_t input;
-	int8_t servo_index = 0;
 
-	// figure out servo index from params
-	if (params->tim == &htim2) servo_index = 0;
-	else servo_index = 4;
+	uint16_t stroke_pulse = 1500;
+	uint16_t pitch_pulse = 2100;
+	uint16_t stroke_pulse2 = 1500;
+	uint16_t pitch_pulse2 = 2100;
+	uint16_t step = 10;    // Frequency = 0.061 Hz * step
+	float phase = 0;
 
-	if (params->channel == TIM_CHANNEL_1) servo_index += 0;
-	else if (params->channel == TIM_CHANNEL_2) servo_index += 1;
-	else if (params->channel == TIM_CHANNEL_3) servo_index += 2;
-	else servo_index += 3;
+	// Reset servos to starting positions
+
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, stroke_pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pitch_pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, stroke_pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pitch_pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, stroke_pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pitch_pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, stroke_pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pitch_pulse);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+
+	osDelay(1000); // Give servos time to reset
 
 	for (;;)
 	{
-		xQueueReceive(ServoQueue[servo_index], &input, 0); // don't Interrupt wave motion, just check for news
+		xQueueReceive(ServoQueue, &input, 0); // get pattern parameters
+
+		float phase_normalized = phase * INCREMENT_RESOLUTION_INV;
+
+		// Calculate pitch and stroke angles
+
+		float sin_val = sinf(2 * M_PI * phase_normalized);
+		float cos_val = cosf(2 * M_PI * phase_normalized);
+
+		float stroke_angle = 65 * sin_val;
+		float stroke_angle2 = -stroke_angle;
+		stroke_pulse = angle_to_pulse(lroundf(stroke_angle));
+		stroke_pulse2 = angle_to_pulse(lroundf(stroke_angle2));
+
+		// float pitch_angle = 65 * cos_val * (2 - fabsf(cos_val)); // More sharp
+		float pitch_angle = 65 * cos_val * (1.5 - 0.5 * fabsf(cos_val)); // Less sharp
+		float pitch_angle2 = -pitch_angle;
+		pitch_pulse = angle_to_pulse(lroundf(pitch_angle));
+		pitch_pulse2 = angle_to_pulse(lroundf(pitch_angle2));
+
+		// stream to all 8 servo pinouts
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, stroke_pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pitch_pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, stroke_pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pitch_pulse);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, stroke_pulse2);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pitch_pulse2);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, stroke_pulse2);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pitch_pulse2);
+
+		phase += step * input.forward;
+
+		if (phase >= INCREMENT_RESOLUTION)
+			phase -= INCREMENT_RESOLUTION; // Reset loop
+
 		osDelay(1);
 	}
-}
-
-
-
-/*
- *  Helper function to convert an integer percentage from -100% to 100% to a bounds checked pulse width
- */
-uint16_t percent_to_pulse(int8_t percent)
-{
-	//
-}
-
-/*
- *  Specific initialization routine for hardware
- */
-void Thruster_Init(void)
-{
-	//
 }
 
 /*

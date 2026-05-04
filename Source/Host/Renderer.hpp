@@ -54,6 +54,15 @@ public:
     void UpdateViewport(int Width, int Height);
 
     /**
+     * @brief Updates OpenGL fullscreen texture.
+     * @param Texture Texture object to update
+     * @param Width Width of the texture.
+     * @param Height Height of the texture.
+     * @note This should be equal to the resolution of the video stream.
+	 */
+    void UpdateTexture(GLuint Texture, int Width, int Height);
+
+    /**
      * @brief Renders video frame to the window.
      * @param CurrentTime Current time in seconds.
      * @param NextRenderTime Reference to object containing next time in seconds a frame should be rendered.

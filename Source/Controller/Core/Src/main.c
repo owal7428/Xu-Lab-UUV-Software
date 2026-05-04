@@ -28,16 +28,11 @@ extern QueueHandle_t MagQueue;
 extern QueueHandle_t Bar30Queue;
 extern QueueHandle_t HumidQueue;
 extern QueueHandle_t BoardQueue;
+extern QueueHandle_t ServoQueue;
 extern QueueHandle_t ThrusterQueue;
-extern QueueHandle_t ServoQueue[8];
 
 /* Mutex lock for making sure that SPI1 communication doesn't collide */
 extern osMutexId_t spiMutex;
-
-/* Arrays to store parameters that ID each servo task to its corresponding servo */
-TIM_HandleTypeDef* tims[2] = {&htim2, &htim3};
-uint32_t channels[4] = {TIM_CHANNEL_1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_4};
-extern ServoParams_t servoParams[2][4];
 
 /* Definitions for task space and handles */
 osThreadId_t ledTaskHandle;
@@ -89,7 +84,7 @@ const osThreadAttr_t thrusterTask_attributes = {
 	.priority = (osPriority_t) osPriorityNormal,
 };
 
-osThreadId_t servoTaskHandle[8];
+osThreadId_t servoTaskHandle;
 const osThreadAttr_t servoTask_attributes = {
 	.name = "Servo_Task",
 	.stack_size = 128 * 4,  // stack in bytes
@@ -123,8 +118,6 @@ static void MX_TIM4_Init(void);
 int main(void)
 {
 	/* MCU Configuration--------------------------------------------------------*/
-	tims[0] = &htim2;
-	tims[1] = &htim3;
 
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
@@ -160,8 +153,8 @@ int main(void)
 	Bar30Queue = xQueueCreate(10, sizeof(Bar30Com_t));
 	HumidQueue = xQueueCreate(10, sizeof(HumidCom_t));
 	BoardQueue = xQueueCreate(10, sizeof(BoardCom_t));
+	ServoQueue = xQueueCreate(10, sizeof(ServoCmd_t));
 	ThrusterQueue = xQueueCreate(10, sizeof(ThrusterCmd_t));
-	for(int i = 0; i < 8; i++) { ServoQueue[i] = xQueueCreate(10, sizeof(ServoCmd_t)); }
 
 	/* Create the thread(s) */
 	ledTaskHandle = osThreadNew(LED_Task, NULL, &ledTask_attributes);
@@ -171,16 +164,8 @@ int main(void)
 	bar30TaskHandle = osThreadNew(Bar30_Task, NULL, &bar30Task_attributes);
 	humidTaskHandle = osThreadNew(Humid_Task, NULL, &humidTask_attributes);
 	boardTaskHandle = osThreadNew(Board_Task, NULL, &boardTask_attributes);
+	servoTaskHandle = osThreadNew(Servo_Task, NULL, &servoTask_attributes);
 	thrusterTaskHandle = osThreadNew(Thruster_Task, NULL, &thrusterTask_attributes);
-	for (int i=0; i<2; i++)
-	{
-		for (int k=0; k<4; k++)
-		{
-			servoParams[i][k].tim = tims[i];
-			servoParams[i][k].channel = channels[k];
-			servoTaskHandle[(i*4)+k] = osThreadNew(Servo_Task, &servoParams[i][k], &servoTask_attributes);
-		}
-	}
 
 	/* Start scheduler */
 	osKernelStart();
