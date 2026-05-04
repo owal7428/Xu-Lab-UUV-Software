@@ -123,6 +123,115 @@ void PiCom_Task(void * argument)
 	}
 }
 
+/* Converts servo angle to PWM pulse */
+uint16_t angle_to_pulse(int16_t angle)
+{
+	// Clamp angle to +/- 65 degrees
+
+	if (angle > 65) angle = 65;
+	if (angle < -65) angle = -65;
+
+	// Converts [-65, 65] to [7.5, 167.5] angle range (servo range is [0, 175])
+	angle += (87.5);
+
+	// Converts angle to [900 us, 2100 us] pulse range
+	return 900 + ((uint32_t)angle * 1200) / 175;
+}
+
+#define INCREMENT_RESOLUTION 16384
+#define INCREMENT_RESOLUTION_INV 0.00006103515625
+
+/*
+ *  Task definition for continuous actuation of the servos,
+ *  implements a simple forward movement pattern
+ */
+void Servo_Task(void* argument)
+{
+	ServoCmd_t input;
+
+	uint16_t stroke_pulse = 1500;
+	uint16_t pitch_pulse = 2100;
+	uint16_t stroke_pulse2 = 1500;
+	uint16_t pitch_pulse2 = 2100;
+	uint16_t step = 10;    // Frequency = 0.061 Hz * step
+	float phase = 0;
+
+	// Reset servos to starting positions
+
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, stroke_pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pitch_pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, stroke_pulse);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pitch_pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, stroke_pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pitch_pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, stroke_pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pitch_pulse);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+
+	osDelay(1000); // Give servos time to reset
+
+	for (;;)
+	{
+		xQueueReceive(ServoQueue, &input, 0); // get pattern parameters
+
+		float phase_normalized = phase * INCREMENT_RESOLUTION_INV;
+
+		// Calculate pitch and stroke angles
+
+		float sin_val = sinf(2 * M_PI * phase_normalized);
+		float cos_val = cosf(2 * M_PI * phase_normalized);
+
+		float stroke_angle = 65 * sin_val;
+		float stroke_angle2 = -stroke_angle;
+		stroke_pulse = angle_to_pulse(lroundf(stroke_angle));
+		stroke_pulse2 = angle_to_pulse(lroundf(stroke_angle2));
+
+		// float pitch_angle = 65 * cos_val * (2 - fabsf(cos_val)); // More sharp
+		float pitch_angle = 65 * cos_val * (1.5 - 0.5 * fabsf(cos_val)); // Less sharp
+		float pitch_angle2 = -pitch_angle;
+		pitch_pulse = angle_to_pulse(lroundf(pitch_angle));
+		pitch_pulse2 = angle_to_pulse(lroundf(pitch_angle2));
+
+		// stream to all 8 servo pinouts
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, stroke_pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pitch_pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, stroke_pulse);
+		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pitch_pulse);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, stroke_pulse2);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pitch_pulse2);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, stroke_pulse2);
+		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pitch_pulse2);
+
+		phase += step * input.forward;
+
+		if (phase >= INCREMENT_RESOLUTION)
+			phase -= INCREMENT_RESOLUTION; // Reset loop
+
+		osDelay(1);
+	}
+}
+
+/*
+ *  Task definition for continuous commanding of the thruster
+ */
+void Thruster_Task(void* arugment)
+{
+	ThrusterCmd_t input;
+
+	for (;;)
+	{
+		xQueueReceive(ThrusterQueue, &input, portMAX_DELAY); // only update at new command
+		osDelay(1);
+	}
+}
+
 /*
  *  Helper function to read multiple bytes of data from IMU SPI line
  */
@@ -845,115 +954,6 @@ void Board_Task(void *argument)
 		HAL_ADC_Stop(&hadc1);
 
 		xQueueSend(BoardQueue, &output, portMAX_DELAY);
-		osDelay(1);
-	}
-}
-
-/* Converts servo angle to PWM pulse */
-uint16_t angle_to_pulse(int16_t angle)
-{
-	// Clamp angle to +/- 65 degrees
-
-	if (angle > 65) angle = 65;
-	if (angle < -65) angle = -65;
-
-	// Converts [-65, 65] to [7.5, 167.5] angle range (servo range is [0, 175])
-	angle += (87.5);
-
-	// Converts angle to [900 us, 2100 us] pulse range
-	return 900 + ((uint32_t)angle * 1200) / 175;
-}
-
-#define INCREMENT_RESOLUTION 16384
-#define INCREMENT_RESOLUTION_INV 0.00006103515625
-
-/*
- *  Task definition for continuous actuation of the servos,
- *  implements a simple forward movement pattern
- */
-void Servo_Task(void* argument)
-{
-	ServoCmd_t input;
-
-	uint16_t stroke_pulse = 1500;
-	uint16_t pitch_pulse = 2100;
-	uint16_t stroke_pulse2 = 1500;
-	uint16_t pitch_pulse2 = 2100;
-	uint16_t step = 10;    // Frequency = 0.061 Hz * step
-	float phase = 0;
-
-	// Reset servos to starting positions
-
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, stroke_pulse);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pitch_pulse);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, stroke_pulse);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pitch_pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, stroke_pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pitch_pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, stroke_pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pitch_pulse);
-	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
-	HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
-
-	osDelay(1000); // Give servos time to reset
-
-	for (;;)
-	{
-		xQueueReceive(ServoQueue, &input, 0); // get pattern parameters
-
-		float phase_normalized = phase * INCREMENT_RESOLUTION_INV;
-
-		// Calculate pitch and stroke angles
-
-		float sin_val = sinf(2 * M_PI * phase_normalized);
-		float cos_val = cosf(2 * M_PI * phase_normalized);
-
-		float stroke_angle = 65 * sin_val;
-		float stroke_angle2 = -stroke_angle;
-		stroke_pulse = angle_to_pulse(lroundf(stroke_angle));
-		stroke_pulse2 = angle_to_pulse(lroundf(stroke_angle2));
-
-		// float pitch_angle = 65 * cos_val * (2 - fabsf(cos_val)); // More sharp
-		float pitch_angle = 65 * cos_val * (1.5 - 0.5 * fabsf(cos_val)); // Less sharp
-		float pitch_angle2 = -pitch_angle;
-		pitch_pulse = angle_to_pulse(lroundf(pitch_angle));
-		pitch_pulse2 = angle_to_pulse(lroundf(pitch_angle2));
-
-		// stream to all 8 servo pinouts
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, stroke_pulse);
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pitch_pulse);
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, stroke_pulse);
-		__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, pitch_pulse);
-		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, stroke_pulse2);
-		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, pitch_pulse2);
-		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, stroke_pulse2);
-		__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pitch_pulse2);
-
-		phase += step * input.forward;
-
-		if (phase >= INCREMENT_RESOLUTION)
-			phase -= INCREMENT_RESOLUTION; // Reset loop
-
-		osDelay(1);
-	}
-}
-
-/*
- *  Task definition for continuous commanding of the thruster
- */
-void Thruster_Task(void* arugment)
-{
-	ThrusterCmd_t input;
-
-	for (;;)
-	{
-		xQueueReceive(ThrusterQueue, &input, portMAX_DELAY); // only update at new command
 		osDelay(1);
 	}
 }
