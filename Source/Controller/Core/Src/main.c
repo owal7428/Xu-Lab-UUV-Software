@@ -34,13 +34,41 @@ extern QueueHandle_t ThrusterQueue;
 /* Mutex lock for making sure that SPI1 communication doesn't collide */
 extern osMutexId_t spiMutex;
 
-/* Definitions for task space and handles */
+// LED task definition
+
 osThreadId_t ledTaskHandle;
 const osThreadAttr_t ledTask_attributes = {
 	.name = "LED_Task",
 	.stack_size = 128 * 4,  // stack in bytes
-	.priority = (osPriority_t) osPriorityNormal,
+	.priority = (osPriority_t) osPriorityBelowNormal,
 };
+
+// Server communication task definition
+
+osThreadId_t picomTaskHandle;
+const osThreadAttr_t picomTask_attributes = {
+	.name = "PiCom_Task",
+	.stack_size = 1024 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityHigh,
+};
+
+// Locomotion task definitions
+
+osThreadId_t thrusterTaskHandle;
+const osThreadAttr_t thrusterTask_attributes = {
+	.name = "Thruster_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityRealtime,
+};
+
+osThreadId_t servoTaskHandle;
+const osThreadAttr_t servoTask_attributes = {
+	.name = "Servo_Task",
+	.stack_size = 128 * 4,  // stack in bytes
+	.priority = (osPriority_t) osPriorityRealtime,
+};
+
+// Sensor reading task definitions
 
 osThreadId_t imuTaskHandle;
 const osThreadAttr_t imuTask_attributes = {
@@ -74,27 +102,6 @@ osThreadId_t boardTaskHandle;
 const osThreadAttr_t boardTask_attributes = {
 	.name = "Board_Task",
 	.stack_size = 128 * 4,  // stack in bytes
-	.priority = (osPriority_t) osPriorityNormal,
-};
-
-osThreadId_t thrusterTaskHandle;
-const osThreadAttr_t thrusterTask_attributes = {
-	.name = "Thruster_Task",
-	.stack_size = 128 * 4,  // stack in bytes
-	.priority = (osPriority_t) osPriorityNormal,
-};
-
-osThreadId_t servoTaskHandle;
-const osThreadAttr_t servoTask_attributes = {
-	.name = "Servo_Task",
-	.stack_size = 128 * 4,  // stack in bytes
-	.priority = (osPriority_t) osPriorityNormal,
-};
-
-osThreadId_t picomTaskHandle;
-const osThreadAttr_t picomTask_attributes = {
-	.name = "PiCom_Task",
-	.stack_size = 1024 * 4,  // stack in bytes
 	.priority = (osPriority_t) osPriorityNormal,
 };
 
