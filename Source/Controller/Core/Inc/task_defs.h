@@ -19,6 +19,14 @@
 #define INITPAUSE 7000 // 7.0 s
 #define PACKETSIZE 128 // 128 bytes
 #define RX_BUFFER_SIZE (PACKETSIZE * 2)
+#define SERVO_ARRAY_SIZE (1<<13)
+
+#define BAR30ADDR (0x76 << 1)
+#define SHTC3ADDR (0x70 << 1)
+
+#define SENSERROR -404
+
+
 
 /* external definitions of connection ports */
 extern ADC_HandleTypeDef hadc1;
