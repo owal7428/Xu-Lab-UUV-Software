@@ -91,18 +91,12 @@ void PiCom_Task(void * argument)
 
 	memcpy(tx, &out, sizeof(out));
 
-	// TODO: Establish communications check with Raspberry Pi
-	// TODO: Check which sensors are online for queue receiving
-	// TODO: Report to Raspberry Pi which sensors are offline
-
 	for (;;)
 	{
 		// perform transfer (controller is slave device so we don't modify CS lines here)
 		HAL_SPI_TransmitReceive(&hspi2, tx, rx, PACKETSIZE, portMAX_DELAY);
 
 		/* distribute commands */
-		// TODO: Adjust queue timeouts in case of queue overflowing
-
 		if (DecodePacket(rx, &in))
 		{
 			xQueueSend(ServoQueue, &in.ServoCmd, 1);
@@ -115,12 +109,11 @@ void PiCom_Task(void * argument)
 		/* collect new data from all sensor queues into the outgoing packet */
 		out.SoP[0] = 0xAA;
 		out.SoP[1] = 0x55;
-		// TODO: Adjust queue timeouts in case of queues underflowing
-		xQueueReceive(IMUQueue, &out.IMUCom, 1);
-		xQueueReceive(MagQueue, &out.MagCom, 1);
-		xQueueReceive(Bar30Queue, &out.Bar30Com, 1);
-		xQueueReceive(HumidQueue, &out.HumidCom, 1);
-		xQueueReceive(BoardQueue, &out.BoardCom, 1);
+		xQueueReceive(IMUQueue, &out.IMUCom, 0);
+		xQueueReceive(MagQueue, &out.MagCom, 0);
+		xQueueReceive(Bar30Queue, &out.Bar30Com, 0);
+		xQueueReceive(HumidQueue, &out.HumidCom, 0);
+		xQueueReceive(BoardQueue, &out.BoardCom, 0);
 
 		// Don't include last byte in checksum calculation
 		out.CheckSum = CalculateChecksum((uint8_t*)&out, sizeof(OutPacket_t) - 1);
